@@ -1,4 +1,18 @@
+# Rust build output, portable packages, and this machine's toolchain
 /target/
-/.tools/
 /dist/
+/.tools/
+
+# Local CodeGraph indexes (Windows / WSL)
+/.codegraph/
+/.codegraph-wsl/
+
+# Python icon-generation helper caches
+__pycache__/
+*.py[cod]
+
+# Development logs and OS metadata
 *.log
+.DS_Store
+Thumbs.db
+Desktop.ini

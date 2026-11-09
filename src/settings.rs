@@ -15,7 +15,6 @@ pub struct Style {
     pub line_height: f32,
     pub foreground: u32,
     pub background: u32,
-    pub multiline: bool,
     pub page_numbers: bool,
 }
 impl Default for Style {
@@ -29,7 +28,6 @@ impl Default for Style {
             line_height: 1.,
             foreground: 0xffffffff,
             background: 0x80000000,
-            multiline: false,
             page_numbers: true,
         }
     }

@@ -20,9 +20,10 @@ try {
         default {
             cargo build --locked --release; if($LASTEXITCODE){throw 'Release build failed'}
             if($Task -eq 'package') {
-                $stage=Join-Path $PSScriptRoot 'dist\Thief-Reader'
+                $stage=Join-Path $PSScriptRoot 'dist\Loafing-Reader'
                 New-Item -ItemType Directory -Force $stage | Out-Null
-                Copy-Item -LiteralPath 'target\release\thief-reader.exe','LICENSE','README.md' -Destination $stage
+                Copy-Item -LiteralPath 'target\release\thief-reader.exe' -Destination (Join-Path $stage 'LoafingReader.exe')
+                Copy-Item -LiteralPath 'LICENSE','README.md' -Destination $stage
                 $notices=Join-Path $stage 'licenses'
                 New-Item -ItemType Directory -Force $notices | Out-Null
                 Copy-Item -LiteralPath 'docs\Slint-License.md' -Destination $notices
@@ -40,8 +41,8 @@ try {
                             ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $stage}
                     }
                 }
-                Compress-Archive -Path (Join-Path $stage '*') -DestinationPath 'dist\Thief-Reader-win64.zip' -Force
-                Get-Item -LiteralPath 'dist\Thief-Reader-win64.zip' | Select-Object FullName,Length
+                Compress-Archive -Path (Join-Path $stage '*') -DestinationPath 'dist\Loafing-Reader-win64.zip' -Force
+                Get-Item -LiteralPath 'dist\Loafing-Reader-win64.zip' | Select-Object FullName,Length
             }
         }
     }

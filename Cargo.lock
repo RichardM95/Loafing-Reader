@@ -4390,6 +4390,8 @@ dependencies = [
  "blake3",
  "chardetng",
  "encoding_rs",
+ "i-slint-backend-testing",
+ "png",
  "regex",
  "rfd",
  "serde",

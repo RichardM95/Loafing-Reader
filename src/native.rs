@@ -18,10 +18,11 @@ pub const TRAY_ITEMS: [(usize, &str); 5] = [
     (1, "系统设置"),
     (4, "显示 / 隐藏"),
     (5, "自动翻页"),
-    (6, "窗口找回"),
+    (6, "找回窗口"),
     (8, "退出"),
 ];
 pub const TRAY: u32 = WM_APP + 7;
+const TOPMOST_TIMER: usize = 16;
 #[derive(Clone, Copy)]
 pub enum Action {
     Previous,
@@ -55,18 +56,23 @@ impl Reader {
         unsafe {
             let instance = GetModuleHandleW(None)?;
             let class = w!("ThiefReaderLayer");
+            let icon = LoadIconW(
+                Some(instance.into()),
+                PCWSTR(std::ptr::without_provenance(1)),
+            )?;
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(procedure),
                 hInstance: instance.into(),
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
+                hIcon: icon,
                 lpszClassName: class,
                 ..Default::default()
             };
             RegisterClassW(&wc);
             let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
                 class,
-                w!("Thief Reader"),
+                w!("Loafing Reader"),
                 WS_POPUP,
                 rect.x,
                 rect.y,
@@ -83,10 +89,10 @@ impl Reader {
                 uID: 1,
                 uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
                 uCallbackMessage: TRAY,
-                hIcon: LoadIconW(None, IDI_APPLICATION)?,
+                hIcon: icon,
                 ..Default::default()
             };
-            let tip = wide("Thief Reader");
+            let tip = wide("Loafing Reader");
             tray.szTip[..tip.len()].copy_from_slice(&tip);
             let _ = Shell_NotifyIconW(NIM_ADD, &tray);
             Ok(Self { hwnd })
@@ -122,7 +128,14 @@ impl Reader {
     }
     pub fn show(&self, yes: bool) {
         unsafe {
-            let _ = ShowWindow(self.hwnd, if yes { SW_SHOWNOACTIVATE } else { SW_HIDE });
+            if yes {
+                let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+                maintain_topmost(self.hwnd);
+                SetTimer(Some(self.hwnd), TOPMOST_TIMER, 250, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), TOPMOST_TIMER);
+                let _ = ShowWindow(self.hwnd, SW_HIDE);
+            }
         }
     }
     pub fn dpi(&self) -> f32 {
@@ -205,6 +218,9 @@ impl Reader {
             let _ = DeleteObject(bitmap.into());
             let _ = DeleteDC(memory);
             ReleaseDC(None, dc);
+            if result.is_ok() {
+                maintain_topmost(self.hwnd);
+            }
             result
         }
     }
@@ -223,24 +239,51 @@ impl Drop for Reader {
         }
     }
 }
-fn parse_key(text: &str) -> Option<(HOT_KEY_MODIFIERS, u32)> {
-    let mut modifiers = HOT_KEY_MODIFIERS(0);
-    let mut key = None;
-    for token in text.split('+') {
-        match token.trim().to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => modifiers |= MOD_CONTROL,
-            "alt" => modifiers |= MOD_ALT,
-            "shift" => modifiers |= MOD_SHIFT,
-            "win" | "meta" => modifiers |= MOD_WIN,
-            "," => key = Some(VK_OEM_COMMA.0 as u32),
-            "." => key = Some(VK_OEM_PERIOD.0 as u32),
-            k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphanumeric() => {
-                key = Some(k.as_bytes()[0].to_ascii_uppercase() as u32)
-            }
-            _ => return None,
+/// Repair an overlapping window above the reader without showing, moving or activating it.
+pub fn maintain_topmost(hwnd: HWND) -> bool {
+    unsafe {
+        if !IsWindowVisible(hwnd).as_bool() {
+            return false;
         }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return false;
+        }
+        let mut blocked = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as isize == 0;
+        let mut previous = GetWindow(hwnd, GW_HWNDPREV).ok();
+        // Bound traversal in case the desktop's z-order changes while it is being walked.
+        for _ in 0..256 {
+            let Some(above) = previous else { break };
+            if IsWindowVisible(above).as_bool() {
+                let mut other = RECT::default();
+                if GetWindowRect(above, &mut other).is_ok()
+                    && rect.left < other.right
+                    && rect.right > other.left
+                    && rect.top < other.bottom
+                    && rect.bottom > other.top
+                {
+                    blocked = true;
+                    break;
+                }
+            }
+            previous = GetWindow(above, GW_HWNDPREV).ok();
+        }
+        blocked
+            && SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+            )
+            .is_ok()
     }
-    key.map(|key| (modifiers, key))
+}
+fn parse_key(text: &str) -> Option<(HOT_KEY_MODIFIERS, u32)> {
+    let key = crate::hotkeys::parse(text)?;
+    Some((HOT_KEY_MODIFIERS(key.modifiers), key.vk))
 }
 unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
@@ -283,7 +326,13 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 _ => Action::Rescue,
             }),
             WM_TIMER if w.0 == 15 => emit(Action::Next),
-            WM_EXITSIZEMOVE => emit(Action::Geometry),
+            WM_TIMER if w.0 == TOPMOST_TIMER => {
+                maintain_topmost(hwnd);
+            }
+            WM_EXITSIZEMOVE => {
+                maintain_topmost(hwnd);
+                emit(Action::Geometry);
+            }
             WM_DISPLAYCHANGE | WM_SETTINGCHANGE => emit(Action::Topology),
             WM_DPICHANGED => {
                 let r = &*(l.0 as *const RECT);
@@ -296,6 +345,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                     r.bottom - r.top,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
+                maintain_topmost(hwnd);
                 emit(Action::Geometry);
             }
             TRAY => {
@@ -421,6 +471,12 @@ pub struct Page {
     pub end: usize,
     pub text: String,
 }
+impl Page {
+    /// Paragraph separators at a page boundary must not create an empty footer line.
+    pub fn display(&self, footer: &str) -> String {
+        format!("{}{footer}", self.text.trim_matches(['\r', '\n']))
+    }
+}
 impl TextEngine {
     pub fn new() -> Result<Self> {
         unsafe {
@@ -481,25 +537,62 @@ impl TextEngine {
                 style.size,
                 w!("zh-CN"),
             )?;
-            format.SetLineSpacing(
-                DWRITE_LINE_SPACING_METHOD_UNIFORM,
-                style.size * 1.4 * style.line_height,
-                style.size * 1.1,
-            )?;
+            format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+            let mut line_height = style.size * 1.4;
+            let mut baseline = style.size * 1.1;
+            // Keep full glyph ascenders/descenders when users choose compact line spacing.
+            if let Ok(collection) = format.GetFontCollection() {
+                let mut index = 0;
+                let mut exists = BOOL::default();
+                if collection
+                    .FindFamilyName(PCWSTR(family.as_ptr()), &mut index, &mut exists)
+                    .is_ok()
+                    && exists.as_bool()
+                    && let Ok(font) = collection.GetFontFamily(index)?.GetFirstMatchingFont(
+                        DWRITE_FONT_WEIGHT(style.weight),
+                        DWRITE_FONT_STRETCH_NORMAL,
+                        if style.italic {
+                            DWRITE_FONT_STYLE_ITALIC
+                        } else {
+                            DWRITE_FONT_STYLE_NORMAL
+                        },
+                    )
+                {
+                    let mut metrics = DWRITE_FONT_METRICS::default();
+                    font.GetMetrics(&mut metrics);
+                    let scale = style.size / metrics.designUnitsPerEm.max(1) as f32;
+                    let ascent = metrics.ascent as f32 * scale;
+                    let glyph_height = (metrics.ascent as f32 + metrics.descent as f32) * scale;
+                    let natural = glyph_height + (metrics.lineGap as f32 * scale).max(0.);
+                    let normal_height = line_height.max(natural);
+                    line_height = (normal_height * style.line_height).max(glyph_height);
+                    baseline = (ascent + (normal_height - glyph_height) * 0.5)
+                        .min(line_height - metrics.descent as f32 * scale);
+                } else {
+                    line_height *= style.line_height;
+                }
+            } else {
+                line_height *= style.line_height;
+            }
+            format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line_height, baseline)?;
             Ok(format)
         }
     }
-    fn fits(&self, text: &str, style: &Style, width: f32, height: f32) -> bool {
+    fn layout(
+        &self,
+        text: &str,
+        style: &Style,
+        format: &IDWriteTextFormat,
+        width: f32,
+        height: f32,
+    ) -> Result<IDWriteTextLayout> {
         unsafe {
-            let Ok(format) = self.format(style) else {
-                return false;
-            };
             let text: Vec<u16> = text.encode_utf16().collect();
-            let Ok(layout) = self.factory.CreateTextLayout(&text, &format, width, height) else {
-                return false;
-            };
+            let layout =
+                self.factory
+                    .CreateTextLayout(&text, format, width.max(1.), height.max(1.))?;
             if let Ok(layout1) = layout.cast::<IDWriteTextLayout1>() {
-                let _ = layout1.SetCharacterSpacing(
+                layout1.SetCharacterSpacing(
                     style.spacing,
                     0.,
                     0.,
@@ -507,15 +600,75 @@ impl TextEngine {
                         startPosition: 0,
                         length: text.len() as u32,
                     },
-                );
+                )?;
             }
-            let mut metrics = DWRITE_TEXT_METRICS::default();
-            layout.GetMetrics(&mut metrics).is_ok()
-                && metrics.height <= height + 0.1
-                && metrics.widthIncludingTrailingWhitespace <= width + 0.1
+            Ok(layout)
         }
     }
+    /// Measure with the exact same format, wrapping and spacing as the rendered bitmap.
+    pub fn text_fits(&self, text: &str, style: &Style, width: f32, height: f32) -> bool {
+        let Ok(format) = self.format(style) else {
+            return false;
+        };
+        self.fits_format(text, style, &format, width, height)
+    }
+    fn fits_format(
+        &self,
+        text: &str,
+        style: &Style,
+        format: &IDWriteTextFormat,
+        width: f32,
+        height: f32,
+    ) -> bool {
+        let Ok(layout) = self.layout(text, style, format, width, height) else {
+            return false;
+        };
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe {
+            let Ok(overhang) = layout.GetOverhangMetrics() else {
+                return false;
+            };
+            layout.GetMetrics(&mut metrics).is_ok()
+                && overhang.top <= 0.05
+                && overhang.bottom <= 0.05
+                && metrics.widthIncludingTrailingWhitespace <= width + 0.05
+        }
+    }
+    pub fn footer_reservation(&self, style: &Style, count: usize) -> String {
+        if !style.page_numbers {
+            return String::new();
+        }
+        let mut widest = '8';
+        let mut max_width = 0.;
+        if let Ok(format) = self.format(style) {
+            for digit in '0'..='9' {
+                if let Ok(layout) = self.layout(&digit.to_string(), style, &format, 1000., 1000.) {
+                    let mut metrics = DWRITE_TEXT_METRICS::default();
+                    if unsafe { layout.GetMetrics(&mut metrics) }.is_ok()
+                        && metrics.widthIncludingTrailingWhitespace > max_width
+                    {
+                        max_width = metrics.widthIncludingTrailingWhitespace;
+                        widest = digit;
+                    }
+                }
+            }
+        }
+        let digits = widest.to_string().repeat(count.max(1).to_string().len());
+        format!("  {digits}/{digits}")
+    }
     pub fn page(&self, text: &str, start: usize, style: &Style, width: f32, height: f32) -> Page {
+        let footer = self.footer_reservation(style, 1);
+        self.page_with_footer(text, start, style, width, height, &footer)
+    }
+    pub fn page_with_footer(
+        &self,
+        text: &str,
+        start: usize,
+        style: &Style,
+        width: f32,
+        height: f32,
+        footer: &str,
+    ) -> Page {
         use unicode_segmentation::UnicodeSegmentation;
         let start = book::boundary(text, start);
         if start >= text.len() {
@@ -524,57 +677,86 @@ impl TextEngine {
                 text: String::new(),
             };
         }
+        let format = self.format(style).ok();
+        let fits = |body: &str| {
+            let Some(format) = format.as_ref() else {
+                return false;
+            };
+            let display = format!("{}{footer}", body.trim_matches(['\r', '\n']));
+            self.fits_format(
+                &display,
+                style,
+                format,
+                (width - 20.).max(1.),
+                height.max(1.),
+            )
+        };
+        let mut graphemes = text[start..].grapheme_indices(true);
         let mut rendered = String::new();
         let mut ends = Vec::new();
-        for (index, grapheme) in text[start..].grapheme_indices(true).take(
-            ((width / style.size.max(1.))
-                * if style.multiline {
-                    height / style.size.max(1.) * 4.
-                } else {
-                    4.
-                })
-            .ceil()
-            .clamp(64., 65536.) as usize,
-        ) {
-            if !style.multiline && grapheme.chars().all(char::is_whitespace) {
-                if !rendered.ends_with(' ') {
-                    rendered.push(' ');
-                }
-            } else {
+        let mut limit = 64usize;
+        loop {
+            let mut exhausted = false;
+            while ends.len() < limit {
+                let Some((index, grapheme)) = graphemes.next() else {
+                    exhausted = true;
+                    break;
+                };
                 rendered.push_str(grapheme);
+                ends.push((rendered.len(), start + index + grapheme.len()));
             }
-            ends.push((rendered.len(), start + index + grapheme.len()));
+            if exhausted || !fits(&rendered) {
+                break;
+            }
+            limit = limit.saturating_mul(2);
         }
-        let footer = if style.page_numbers {
-            style.size * 11.
-        } else {
-            0.
-        };
-        let available = (width - 20. - footer).max(style.size * 2.);
-        let height = if style.multiline {
-            height
-        } else {
-            height.min(style.size * 1.5)
-        };
         let mut low = 0;
         let mut high = ends.len();
         while low < high {
             let mid = (low + high).div_ceil(2);
-            if self.fits(
-                &rendered[..ends[mid - 1].0],
-                style,
-                available,
-                height.max(style.size * 1.4),
-            ) {
-                low = mid
+            if fits(&rendered[..ends[mid - 1].0]) {
+                low = mid;
             } else {
-                high = mid - 1
+                high = mid - 1;
             }
         }
+        // A viewport smaller than one glyph must still advance the source anchor.
         let n = low.max(1);
         Page {
             end: ends[n - 1].1,
             text: rendered[..ends[n - 1].0].to_owned(),
+        }
+    }
+    pub fn paginate(
+        &self,
+        text: &str,
+        style: &Style,
+        width: f32,
+        height: f32,
+        cancelled: impl Fn() -> bool,
+    ) -> std::result::Result<Vec<usize>, String> {
+        let mut footer = self.footer_reservation(style, 1);
+        loop {
+            let mut pages = Vec::new();
+            let mut position = 0;
+            while position < text.len() {
+                if cancelled() {
+                    return Err("cancelled".into());
+                }
+                pages.push(position);
+                let next = self
+                    .page_with_footer(text, position, style, width, height, &footer)
+                    .end;
+                if next <= position {
+                    return Err("分页未前进".into());
+                }
+                position = next;
+            }
+            let required = self.footer_reservation(style, pages.len());
+            if required == footer {
+                return Ok(pages);
+            }
+            footer = required;
         }
     }
     pub fn render(
@@ -623,24 +805,13 @@ impl TextEngine {
                 format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
                 format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
             }
-            let wide: Vec<u16> = text.encode_utf16().collect();
-            let layout = self.factory.CreateTextLayout(
-                &wide,
+            let layout = self.layout(
+                text,
+                style,
                 &format,
-                (width as f32 / dpi - 20.).max(1.),
+                width as f32 / dpi - 20.,
                 height as f32 / dpi,
             )?;
-            if let Ok(layout1) = layout.cast::<IDWriteTextLayout1>() {
-                layout1.SetCharacterSpacing(
-                    style.spacing,
-                    0.,
-                    0.,
-                    DWRITE_TEXT_RANGE {
-                        startPosition: 0,
-                        length: wide.len() as u32,
-                    },
-                )?;
-            }
             target.DrawTextLayout(
                 windows_numerics::Vector2 { X: 10., Y: 0. },
                 &layout,

@@ -28,3 +28,7 @@ strip = true
 name = "thief-reader"
 path = "src/main.rs"
 required-features = ["desktop"]
+
+[dev-dependencies]
+i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-skia"] }
+png = "=0.18.1"

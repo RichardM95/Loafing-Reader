@@ -1,13 +1,123 @@
-import { VerticalBox, HorizontalBox, Button, LineEdit, SpinBox, CheckBox, ComboBox, Slider, ProgressIndicator, ScrollView, ListView, AboutSlint } from "std-widgets.slint";
+import { VerticalBox, HorizontalBox, Button, LineEdit, SpinBox, CheckBox, ComboBox, Slider, ScrollView, ListView, AboutSlint, Palette } from "std-widgets.slint";
 export struct ScreenBox { name: string, x: float, y: float, w: float, h: float }
+component NavItem inherits Rectangle {
+    in property <string> label; in property <string> glyph;
+    in property <bool> selected;
+    callback clicked();
+    height: 40px;
+    border-radius: 5px;
+    background: selected ? Palette.accent-background : touch.has-hover ? Palette.control-background : transparent;
+    border-width: focus.has-focus ? 2px : 0px; border-color: Palette.accent-background;
+    accessible-role: button; accessible-label: label; accessible-action-default => {root.clicked();}
+    HorizontalBox { padding-left: 10px; padding-right: 10px; spacing: 12px;
+        Text { text: root.glyph; font-family: "Segoe MDL2 Assets"; font-size: 16px; color: root.selected ? Palette.accent-foreground : Palette.foreground; width: 18px; vertical-alignment: center; }
+        Text { text: root.label; color: root.selected ? Palette.accent-foreground : Palette.foreground; vertical-alignment: center; horizontal-stretch: 1; }
+    }
+    focus := FocusScope { key-pressed(e) => {if e.text == Key.Return || e.text == " " {root.clicked();return accept;} return reject;} }
+    touch := TouchArea { clicked => {focus.focus();root.clicked();} }
+}
+component HotkeyRecorder inherits VerticalBox {
+    in property <string> label;
+    in property <[string]> caps;
+    in property <bool> recording;
+    in property <string> error;
+    callback begin(); callback cancel(); callback press(string,bool,bool,bool,bool); callback release();
+    spacing: 6px; padding: 0px;
+    Text { text: root.label; font-size: 13px; }
+    HorizontalBox { padding: 0px; spacing: 8px;
+        Rectangle { horizontal-stretch: 1; height: 42px; border-radius: 5px;
+            background: Palette.control-background;
+            border-width: root.recording || focus.has-focus ? 2px : 1px;
+            border-color: root.recording || focus.has-focus ? Palette.accent-background : Palette.border;
+            accessible-role: button; accessible-label: "录制" + root.label;
+            accessible-action-default => { focus.focus(); root.begin(); }
+            HorizontalBox { padding: 7px; spacing: 5px; alignment: start;
+                if root.caps.length == 0: Text { text: root.recording ? "请按组合键…" : "点击录制快捷键"; vertical-alignment: center; color: Palette.foreground; }
+                for cap in root.caps: Rectangle {
+                    width: max(28px, key-text.preferred-width + 14px); height: 26px;
+                    background: Palette.alternate-background; border-color: Palette.border; border-width: 1px; border-radius: 4px;
+                    key-text := Text { text: cap; horizontal-alignment: center; vertical-alignment: center; font-size: 12px; }
+                }
+            }
+            focus := FocusScope {
+                focus-lost(reason) => {if root.recording {root.cancel();}}
+                key-pressed(e) => {
+                    if e.repeat {return accept;}
+                    if root.recording {
+                        if e.text == Key.Escape {root.cancel();} else {root.press(e.text,e.modifiers.control,e.modifiers.alt,e.modifiers.shift,e.modifiers.meta);}
+                        return accept;
+                    }
+                    if e.text == Key.Return || e.text == " " {root.begin();return accept;}
+                    return reject;
+                }
+                key-released(e) => {if root.recording {root.release();return accept;} return reject;}
+            }
+            TouchArea { clicked => {focus.focus();root.begin();} }
+        }
+        if root.recording: Button { text: "取消"; clicked => {root.cancel();} }
+    }
+    if root.recording: Text { text: "松开按键确认，Esc 或移开焦点取消"; font-size: 12px; color: Palette.foreground; opacity: 0.72; wrap: word-wrap; }
+    if root.error != "": Text {text: root.error; color: #d84343; font-size: 12px; wrap: word-wrap;}
+}
+component FontSelect inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    height: 32px; horizontal-stretch: 1;
+    background: Palette.control-background; border-radius: 4px;
+    border-width: focus.has-focus ? 2px : 1px; border-color: focus.has-focus ? Palette.accent-background : Palette.border;
+    accessible-role: button; accessible-label: text; accessible-action-default => {root.clicked();}
+    Text { x: 12px; width: max(0px,parent.width - 40px); height: parent.height; text: root.text; overflow: elide; vertical-alignment: center; }
+    Text { x: parent.width - 24px; height: parent.height; text: "\u{E70D}"; font-family: "Segoe MDL2 Assets"; vertical-alignment: center; }
+    focus := FocusScope { key-pressed(e) => {if e.text == Key.Return || e.text == " " {root.clicked();return accept;} return reject;} }
+    TouchArea { clicked => {focus.focus();root.clicked();} }
+}
+component Heading inherits VerticalBox {
+    in property <string> title;
+    in property <string> subtitle;
+    spacing: 4px; padding: 0px;
+    Text { text: title; font-size: 16px; font-weight: 600; }
+    if subtitle != "": Text { text: subtitle; font-size: 12px; color: Palette.foreground; opacity: 0.72; wrap: word-wrap; }
+}
+component Field inherits VerticalBox {
+    in property <string> label;
+    spacing: 6px; padding: 0px;
+    Text { text: label; font-size: 13px; }
+    @children
+}
+component ColorField inherits VerticalBox {
+    in property <string> label;
+    in-out property <string> value;
+    in-out property <int> alpha: 100;
+    in property <string> error;
+    in property <color> swatch: #808080;
+    callback changed();
+    spacing: 8px; padding: 0px;
+    Text { text: label; font-weight: 600; }
+    HorizontalBox {
+        padding: 0px; spacing: 8px;
+        Rectangle { width: 32px; height: 32px; background: root.swatch; border-radius: 4px; border-width: 1px; border-color: Palette.border; }
+        LineEdit { width: 200px; text <=> value; placeholder-text: "#RRGGBB"; edited => { root.changed(); } }
+        ComboBox { width: 100px; model: ["选色", "#FFFFFF", "#000000", "#808080", "#0078D4", "#E74856", "#16A085", "#FFB900"]; selected(v) => { if v != "选色" { root.value = v; root.changed(); } } }
+    }
+    HorizontalBox {
+        padding: 0px; spacing: 8px;
+        Text { text: "不透明度"; font-size: 12px; color: Palette.foreground; opacity: 0.72; }
+        Slider { max-width: 300px; value: root.alpha; minimum: 0; maximum: 100; changed(v) => { root.alpha = round(v); root.changed(); } }
+        SpinBox { width: 90px; value <=> root.alpha; minimum: 0; maximum: 100; edited => { root.changed(); } }
+        Text { text: "%"; }
+    }
+    if error != "": Text { text: error; color: #d84343; font-size: 12px; wrap: word-wrap; }
+}
+export { Palette }
 export component AppWindow inherits Window {
-    title: "Thief Reader · 系统设置";
-    preferred-width: 1000px;
-    preferred-height: 720px;
-    min-width: 650px;
-    min-height: 520px;
+    title: "Loafing Reader · 系统设置";
+    icon: @image-url("../assets/loafing-reader.png");
+    preferred-width: 1000px; preferred-height: 720px;
+    min-width: 650px; min-height: 520px;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+    background: Palette.background;
     in-out property <int> section: 0;
-    in-out property <bool> compact: false;
     in-out property <string> book-name: "打开一本小说，继续阅读";
     in-out property <string> status: "就绪";
     in-out property <float> progress: 0;
@@ -22,11 +132,12 @@ export component AppWindow inherits Window {
     in-out property <int> font-size: 14;
     in-out property <int> weight: 400;
     in-out property <bool> italic: false;
+    in-out property <string> spacing-input: "0";
+    in property <string> spacing-error;
     in-out property <int> letter-spacing: 0;
     in-out property <int> line-spacing: 100;
     in-out property <string> foreground: "#FFFFFFFF";
     in-out property <string> background-color: "#80000000";
-    in-out property <bool> multiline: false;
     in-out property <bool> page-numbers: true;
     in-out property <bool> mouse-mode: false;
     in-out property <int> interval: 5;
@@ -39,6 +150,14 @@ export component AppWindow inherits Window {
     in-out property <int> reader-width: 856;
     in-out property <int> reader-height: 47;
     in property <[string]> key-errors: ["", "", "", "", ""];
+    in-out property <int> recording-index: -1;
+    in-out property <string> recording-preview;
+    in-out property <string> recording-error;
+    pure callback key-caps(string) -> [string];
+    callback begin-recording(int); callback cancel-recording(int);
+    callback record-pressed(int,string,bool,bool,bool,bool); callback record-released(int);
+    changed minimized => {if root.minimized && root.recording-index >= 0 {root.cancel-recording(-1);}}
+    changed section => {if root.recording-index >= 0 {root.cancel-recording(-1);}}
     in-out property <string> previous-key: "Ctrl+Alt+,";
     in-out property <string> next-key: "Ctrl+Alt+.";
     in-out property <string> boss-key: "Ctrl+Alt+M";
@@ -62,43 +181,66 @@ export component AppWindow inherits Window {
     callback apply-keys();
     callback save-options();
     callback quit();
-    VerticalBox {
-        spacing: 0px;
-        padding: 0px;
+
+    in property <[string]> screen-names;
+    in-out property <[bool]> dirty: [false, false, false, false, false, false];
+    in-out property <color> foreground-swatch;
+    in-out property <color> background-swatch;
+    in-out property <int> foreground-alpha: 100;
+    in-out property <int> background-alpha: 50;
+    in-out property <[string]> color-errors: ["", ""];
+    in-out property <string> font-query;
+    in property <[string]> filtered-fonts;
+    in-out property <bool> font-picker: false;
+    in-out property <bool> advanced: false;
+    in-out property <int> preview-background: 0;
+    in property <float> preview-width: 856;
+    in property <float> preview-height: 47;
+    in property <float> map-ratio: 2.5;
+    in property <float> actual-x; in property <float> actual-y;
+    in property <float> actual-w; in property <float> actual-h;
+    in property <float> draft-x; in property <float> draft-y;
+    in property <float> draft-w; in property <float> draft-h;
+    callback draft-changed(); callback apply-current(); callback revert-current();
+    callback filter-fonts(); callback center-position(); callback reset-position();
+    property <[string]> titles: ["阅读", "外观", "阅读操作", "窗口位置", "快捷键", "关于"];
+    HorizontalBox {
+        padding: 0px; spacing: 0px;
         Rectangle {
-            height: 84px;
-            background: #6878d51a;
-            HorizontalBox {
-                padding: 20px;
-                VerticalBox {
-                    spacing: 5px;
-                    Text { text: root.book-name; font-size: 20px; font-weight: 600; overflow: elide; }
-                    Text { text: round(root.progress * 1000) / 10 + "%"; color: #7b8393; }
+            width: 196px;
+            background: Palette.alternate-background;
+            VerticalBox {
+                padding: 12px; spacing: 8px;
+                Rectangle { height: 52px; background: transparent;
+                    Image { x: 0px; y: 12px; width: 28px; height: 28px; source: @image-url("../assets/loafing-reader.png"); }
+                    Text { x: 36px; width: parent.width - 36px; height: parent.height; text: "Loafing Reader"; font-size: 15px; font-weight: 600; vertical-alignment: center; }
                 }
-                Button { text: "打开 TXT"; primary: true; clicked => { root.open-book(); } }
-                Button { text: "继续阅读"; clicked => { root.recent-book(); } }
+                for name[i] in root.titles: NavItem {
+                    label: name + (root.dirty[i] ? " •" : "");
+                    glyph: ["\u{E8F1}", "\u{E8D2}", "\u{E713}", "\u{E7F4}", "\u{E765}", "\u{E946}"][i];
+                    selected: root.section == i;
+                    clicked => { root.section = i; }
+                }
+                Rectangle { vertical-stretch: 1; }
+                Button { text: "找回窗口"; clicked => { root.rescue(); } }
+                Button { text: "显示 / 隐藏"; clicked => { root.toggle-reader(); } }
             }
         }
-        HorizontalBox {
-            padding: 16px;
-            spacing: 18px;
-            VerticalBox {
-                width: root.compact ? 86px : 142px;
-                spacing: 8px;
-                Button { text: root.compact ? "展开导航" : "收起导航"; clicked => { root.compact = !root.compact; } }
-                Button { text: "阅读"; primary: root.section == 0; clicked => { root.section = 0; } }
-                Button { text: "外观"; primary: root.section == 1; clicked => { root.section = 1; } }
-                Button { text: "窗口与快捷键"; primary: root.section == 2; clicked => { root.section = 2; } }
-                Rectangle { vertical-stretch: 1; }
-                Button { text: "窗口找回"; clicked => { root.rescue(); } }
-                Button { text: "显示 / 隐藏"; clicked => { root.toggle-reader(); } }
-                Button { text: "关于"; clicked => { root.section = 3; } }
-                Button { text: "退出"; clicked => { root.quit(); } }
+        VerticalBox {
+            horizontal-stretch: 1;
+            padding: 24px; spacing: 16px;
+            HorizontalBox {
+                padding: 0px;
+                Text { text: root.titles[root.section]; font-size: 22px; font-weight: 600; horizontal-stretch: 1; }
+                if root.section == 0: Button { text: "打开 TXT"; primary: true; clicked => { root.open-book(); } }
+                if root.section == 0: Button { text: "最近阅读"; clicked => { root.recent-book(); } }
             }
             if root.section == 0: VerticalBox {
                 spacing: 12px;
+                Text { text: root.book-name; font-size: 16px; font-weight: 600; overflow: elide; }
+                Text { text: "阅读进度 " + round(root.progress * 1000) / 10 + "%"; color: Palette.foreground.darker(0.25); font-size: 12px; }
                 HorizontalBox {
-                    ComboBox { model: ["auto", "utf-8", "utf-16le", "utf-16be", "gbk", "gb18030", "big5"]; selected(value) => { root.encoding = value; root.change-encoding(); } }
+                    if root.advanced: ComboBox { model: ["auto", "utf-8", "utf-16le", "utf-16be", "gbk", "gb18030", "big5"]; selected(value) => { root.encoding = value; root.change-encoding(); } }
                     Button { text: "章节目录"; clicked => { root.show-chapters(); } }
                     LineEdit { text <=> root.query; placeholder-text: "搜索正文"; accepted => { root.search(); } }
                     Button { text: "搜索"; clicked => { root.search(); } }
@@ -120,114 +262,214 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                HorizontalBox {
+                HorizontalBox { padding: 0px; spacing: 8px;
+                    Button { width: 180px; text: root.advanced ? "收起高级选项" : "编码与章节规则"; clicked => { root.advanced = !root.advanced; } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                if root.advanced: HorizontalBox {
                     LineEdit { text <=> root.rule; placeholder-text: "本书章节正则，留空使用自动识别"; }
                     Button { text: "预览"; clicked => { root.apply-rule(false); } }
                     Button { text: "应用"; clicked => { root.apply-rule(true); } }
                 }
                 HorizontalBox {
-                    Button { text: "上一页"; clicked => { root.previous(); } }
-                    Button { text: "下一页"; primary: true; clicked => { root.next(); } }
-                    Button { text: "自动翻页"; clicked => { root.toggle-auto(); } }
-                    Text { text: "间隔"; }
-                    SpinBox { value <=> root.interval; minimum: 1; maximum: 3600; }
-                    Text { text: "秒"; }
-                    Button { text: "保存"; clicked => { root.save-options(); } }
+                    Button { width: 96px; text: "上一页"; clicked => { root.previous(); } }
+                    Button { width: 96px; text: "下一页"; primary: true; clicked => { root.next(); } }
+                    Button { width: 112px; text: "自动翻页"; clicked => { root.toggle-auto(); } }
+                    Rectangle { horizontal-stretch: 1; }
                 }
             }
-            if root.section == 1: ScrollView {
-                VerticalBox {
-                    spacing: 14px;
-                    Text { text: "当前正文预览"; font-size: 18px; font-weight: 600; }
-                    Rectangle {
-                        height: 130px;
-                        background: #a0a5ae;
-                        Image { source: root.preview; image-fit: contain; }
-                    }
-                    HorizontalBox {
-                        Text { text: "字体"; width: 75px; }
-                        LineEdit { text <=> root.family; }
-                        Button { text: "导入字体"; clicked => { root.import-font(); } }
-                    }
-                    ComboBox { current-value <=> root.family; model: root.font-families; selected(value) => { root.family = value; root.apply-style(); } }
-                    HorizontalBox {
-                        Text { text: "字号"; } SpinBox { value <=> root.font-size; minimum: 8; maximum: 100;  edited => { root.apply-style(); } }
-                        Text { text: "粗细"; } SpinBox { value <=> root.weight; minimum: 100; maximum: 900;  edited => { root.apply-style(); } }
-                        CheckBox { text: "斜体"; checked <=> root.italic; toggled => { root.apply-style(); } }
-                    }
-                    HorizontalBox {
-                        Text { text: "字距 × 0.1"; } SpinBox { value <=> root.letter-spacing; minimum: -20; maximum: 100;  edited => { root.apply-style(); } }
-                        Text { text: "行高 %"; } SpinBox { value <=> root.line-spacing; minimum: 80; maximum: 300;  edited => { root.apply-style(); } }
-                    }
-                    HorizontalBox {
-                        Text { text: "文字色"; } LineEdit { text <=> root.foreground; placeholder-text: "#AARRGGBB"; }
-                        Text { text: "背景色"; } LineEdit { text <=> root.background-color; placeholder-text: "#AARRGGBB"; }
-                    }
-                    HorizontalBox {
-                        CheckBox { text: "多行阅读"; checked <=> root.multiline; toggled => { root.apply-style(); } }
-                        CheckBox { text: "行末页码"; checked <=> root.page-numbers; toggled => { root.apply-style(); } }
-                        CheckBox { text: "鼠标翻页"; checked <=> root.mouse-mode; toggled => { root.apply-style(); } }
-                    }
-                    HorizontalBox {
-                        Text { text: "伪装文字"; }
-                        LineEdit { text <=> root.disguise; }
-                    }
-                    Button { text: "应用并预览"; primary: true; clicked => { root.apply-style(); } }
+
+            if root.section == 1: VerticalBox {
+                spacing: 16px; padding: 0px;
+                HorizontalBox {
+                    padding: 0px;
+                    Text { text: "正文预览"; font-weight: 600; horizontal-stretch: 1; }
+                    ComboBox { width: 120px; model: ["浅色底图", "深色底图", "棋盘格底图"]; current-index <=> root.preview-background; }
                 }
-            }
-            if root.section == 3: VerticalBox {
-                Text { text: "Thief Reader"; font-size: 24px; font-weight: 600; }
-                Text { text: "0.1.0 · Rust · Windows"; }
-                AboutSlint { }
-                Rectangle { vertical-stretch: 1; }
-            }
-            if root.section == 2: ScrollView {
-                VerticalBox {
-                    spacing: 12px;
-                    Text { text: "显示器与窗口位置"; font-size: 18px; font-weight: 600; }
-                    Rectangle {
-                        height: 160px;
-                        background: #6878d511;
-                        for screen[index] in root.screens: Rectangle {
-                            x: screen.x * parent.width;
-                            y: screen.y * 140px + 10px;
-                            width: screen.w * parent.width;
-                            height: screen.h * 140px;
-                            border-width: 2px;
-                            border-color: index == root.monitor-index ? #6878d5 : #a0a5ae;
-                            border-radius: 4px;
-                            Text { text: screen.name; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; }
-                            TouchArea { clicked => { root.select-screen(index); } }
+                Rectangle {
+                    height: 108px; clip: true; border-radius: 6px;
+                    background: root.preview-background == 1 ? #30343b : #e8ebef;
+                    if root.preview-background == 2: Rectangle {
+                        for row in 6: Rectangle {
+                            y: row * 18px; height: 18px; width: parent.width;
+                            for col in 60: Rectangle { x: col * 18px; width: 18px; height: 18px; background: mod(row + col, 2) == 0 ? #e8ebef : #c4c9d0; }
                         }
                     }
-                    HorizontalBox {
-                        Text { text: "屏内 X"; } SpinBox { value <=> root.pos-x; minimum: -10000; maximum: 10000; }
-                        Text { text: "Y"; } SpinBox { value <=> root.pos-y; minimum: -10000; maximum: 10000; }
+                    ScrollView {
+                        content-width: root.preview-width * 1px; content-height: max(80px, root.preview-height * 1px);
+                        Image { width: root.preview-width * 1px; height: root.preview-height * 1px; source: root.preview; image-fit: contain; }
                     }
-                    HorizontalBox {
-                        Text { text: "宽"; } SpinBox { value <=> root.reader-width; minimum: 100; maximum: 10000; }
-                        Text { text: "高"; } SpinBox { value <=> root.reader-height; minimum: 24; maximum: 10000; }
-                        Button { text: "应用位置"; clicked => { root.apply-position(); } }
-                        Button { text: "窗口找回"; clicked => { root.rescue(); } }
+                }
+                ScrollView { VerticalBox {
+                    padding: 0px; spacing: 16px;
+                    Heading { title: "字体与排版"; subtitle: "预览不会影响正在阅读的内容，应用后才会生效。"; }
+                    Field { label: "字体";
+                        HorizontalBox { padding: 0px; spacing: 8px;
+                            FontSelect { text: root.family; horizontal-stretch: 1; clicked => { root.font-picker = !root.font-picker; } }
+                            Button { text: "导入字体"; clicked => { root.import-font(); } }
+                        }
                     }
-                    HorizontalBox { Text { text: "上一页"; width: 90px; } LineEdit { text <=> root.previous-key; } }
-                    if root.key-errors[0] != "": Text { text: root.key-errors[0]; color: #dc4545; wrap: word-wrap; }
-                    HorizontalBox { Text { text: "下一页"; width: 90px; } LineEdit { text <=> root.next-key; } }
-                    if root.key-errors[1] != "": Text { text: root.key-errors[1]; color: #dc4545; wrap: word-wrap; }
-                    HorizontalBox { Text { text: "老板键"; width: 90px; } LineEdit { text <=> root.boss-key; } }
-                    if root.key-errors[2] != "": Text { text: root.key-errors[2]; color: #dc4545; wrap: word-wrap; }
-                    HorizontalBox { Text { text: "自动翻页"; width: 90px; } LineEdit { text <=> root.auto-key; } }
-                    if root.key-errors[3] != "": Text { text: root.key-errors[3]; color: #dc4545; wrap: word-wrap; }
-                    HorizontalBox { Text { text: "找回窗口"; width: 90px; } LineEdit { text <=> root.rescue-key; } }
-                    if root.key-errors[4] != "": Text { text: root.key-errors[4]; color: #dc4545; wrap: word-wrap; }
-                    Button { text: "保存快捷键"; primary: true; clicked => { root.apply-keys(); } }
+                    if root.font-picker: VerticalBox {
+                        padding: 0px; spacing: 8px;
+                        LineEdit { text <=> root.font-query; placeholder-text: "输入字体名称筛选"; edited => { root.filter-fonts(); } }
+                        ListView { height: 132px;
+                            for family in root.filtered-fonts: Button { text: family; clicked => { root.family = family; root.font-picker = false; root.draft-changed(); } }
+                        }
+                    }
+                    HorizontalBox { padding: 0px; spacing: 16px;
+                        Field { label: "字号（像素）"; SpinBox { width: 112px; value <=> root.font-size; minimum: 8; maximum: 100; edited => { root.draft-changed(); } } }
+                        Field { label: "字重"; ComboBox { width: 142px; model: ["细体", "常规", "中等", "半粗", "粗体", "特粗"]; current-index: root.weight <= 300 ? 0 : root.weight <= 400 ? 1 : root.weight <= 500 ? 2 : root.weight <= 600 ? 3 : root.weight <= 700 ? 4 : 5; selected(v) => { root.weight = v == "细体" ? 300 : v == "常规" ? 400 : v == "中等" ? 500 : v == "半粗" ? 600 : v == "粗体" ? 700 : 800; root.draft-changed(); } } }
+                        CheckBox { text: "斜体"; checked <=> root.italic; toggled => { root.draft-changed(); } }
+                    }
+                    HorizontalBox { padding: 0px; spacing: 16px;
+                        Field { label: "字距（像素）"; LineEdit { width: 112px; text <=> root.spacing-input; edited => { root.draft-changed(); } } }
+                        Field { label: "行距（%）"; SpinBox { width: 112px; value <=> root.line-spacing; minimum: 80; maximum: 300; edited => { root.draft-changed(); } } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    if root.spacing-error != "": Text { text: root.spacing-error; color: #d84343; font-size: 12px; }
+                    Heading { title: "颜色与透明度"; }
+                    ColorField { label: "文字颜色"; swatch: root.foreground-swatch; value <=> root.foreground; alpha <=> root.foreground-alpha; error: root.color-errors[0]; changed => { root.draft-changed(); } }
+                    ColorField { label: "背景颜色"; swatch: root.background-swatch; value <=> root.background-color; alpha <=> root.background-alpha; error: root.color-errors[1]; changed => { root.draft-changed(); } }
+                    Heading { title: "正文显示"; }
+                    CheckBox { text: "显示行末页码"; checked <=> root.page-numbers; toggled => { root.draft-changed(); } }
+                } }
+            }
+            if root.section == 2: ScrollView { VerticalBox {
+                padding: 0px; spacing: 24px;
+                Heading { title: "翻页方式"; subtitle: "设置应用后生效。老板键会隐藏窗口并暂停自动翻页。"; }
+                CheckBox { text: "使用鼠标左键下一页、右键上一页"; checked <=> root.mouse-mode; toggled => { root.draft-changed(); } }
+                Field { label: "自动翻页间隔（秒）"; SpinBox { width: 112px; value <=> root.interval; minimum: 1; maximum: 3600; edited => { root.draft-changed(); } } }
+                Heading { title: "伪装文字"; subtitle: "未打开小说时显示的居中文字。"; }
+                LineEdit { text <=> root.disguise; edited => { root.draft-changed(); } }
+                Rectangle { vertical-stretch: 1; }
+            } }
+            if root.section == 3: ScrollView { VerticalBox {
+                padding: 0px; spacing: 16px;
+                Heading { title: "显示器与阅读窗"; subtitle: "蓝色为当前窗口，橙色为待应用位置。"; }
+                Rectangle { height: 180px; background: Palette.alternate-background; clip: true;
+                    property <length> map-w: min(self.width - 24px, 156px * root.map-ratio);
+                    property <length> map-h: self.map-w / root.map-ratio;
+                    for screen[index] in root.screens: Rectangle {
+                        x: (parent.width - parent.map-w) / 2 + screen.x * parent.map-w;
+                        y: (parent.height - parent.map-h) / 2 + screen.y * parent.map-h;
+                        width: screen.w * parent.map-w; height: screen.h * parent.map-h;
+                        background: index == root.monitor-index ? #0078d428 : #80808020;
+                        border-width: 1px; border-color: Palette.border; border-radius: 4px;
+                        Text { text: "" + (index + 1); horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { clicked => { root.select-screen(index); } }
+                    }
+                    Rectangle { x: (parent.width - parent.map-w)/2 + root.actual-x * parent.map-w; y: (parent.height - parent.map-h)/2 + root.actual-y*parent.map-h; width: max(4px, root.actual-w*parent.map-w); height: max(3px,root.actual-h*parent.map-h); background: #0078d4; }
+                    Rectangle { x: (parent.width - parent.map-w)/2+root.draft-x*parent.map-w; y: (parent.height - parent.map-h)/2+root.draft-y*parent.map-h; width: max(4px,root.draft-w*parent.map-w); height: max(3px,root.draft-h*parent.map-h); background: #ff980060; border-width: 1px; border-color: #ff9800; }
+                }
+                ComboBox { model: root.screen-names; current-index <=> root.monitor-index; selected => { root.select-screen(root.monitor-index); } }
+                HorizontalBox { padding: 0px; spacing: 16px;
+                    Field { label: "屏内 X（像素）"; SpinBox { width: 112px; value <=> root.pos-x; minimum: -10000; maximum: 10000; edited => { root.draft-changed(); } } }
+                    Field { label: "屏内 Y（像素）"; SpinBox { width: 112px; value <=> root.pos-y; minimum: -10000; maximum: 10000; edited => { root.draft-changed(); } } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                HorizontalBox { padding: 0px; spacing: 16px;
+                    Field { label: "宽度（像素）"; SpinBox { width: 112px; value <=> root.reader-width; minimum: 100; maximum: 10000; edited => { root.draft-changed(); } } }
+                    Field { label: "高度（像素）"; SpinBox { width: 112px; value <=> root.reader-height; minimum: 24; maximum: 10000; edited => { root.draft-changed(); } } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                HorizontalBox { padding: 0px; spacing: 8px;
+                    Button { text: "居中"; clicked => { root.center-position(); } }
+                    Button { text: "重置位置"; clicked => { root.reset-position(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Text { text: "坐标相对于目标屏幕工作区，应用后移动窗口。找回窗口会立即执行。"; wrap: word-wrap; font-size: 12px; color: Palette.foreground; opacity: 0.72; }
+            } }
+            if root.section == 4: ScrollView { VerticalBox {
+                padding: 0px; spacing: 16px;
+                Heading { title: "全局快捷键"; subtitle: "点击键帽区域，直接按下组合键。修改后点击应用，冲突时保留原配置。"; }
+                HotkeyRecorder {
+                    label: "上一页"; recording: root.recording-index == 0;
+                    caps: root.key-caps(self.recording ? root.recording-preview : root.previous-key);
+                    error: self.recording ? root.recording-error : root.key-errors[0];
+                    begin => {root.begin-recording(0);}
+                    cancel => {root.cancel-recording(0);}
+                    press(text,ctrl,alt,shift,meta) => {root.record-pressed(0,text,ctrl,alt,shift,meta);}
+                    release => {root.record-released(0);}
+                }
+                HotkeyRecorder {
+                    label: "下一页"; recording: root.recording-index == 1;
+                    caps: root.key-caps(self.recording ? root.recording-preview : root.next-key);
+                    error: self.recording ? root.recording-error : root.key-errors[1];
+                    begin => {root.begin-recording(1);}
+                    cancel => {root.cancel-recording(1);}
+                    press(text,ctrl,alt,shift,meta) => {root.record-pressed(1,text,ctrl,alt,shift,meta);}
+                    release => {root.record-released(1);}
+                }
+                HotkeyRecorder {
+                    label: "老板键"; recording: root.recording-index == 2;
+                    caps: root.key-caps(self.recording ? root.recording-preview : root.boss-key);
+                    error: self.recording ? root.recording-error : root.key-errors[2];
+                    begin => {root.begin-recording(2);}
+                    cancel => {root.cancel-recording(2);}
+                    press(text,ctrl,alt,shift,meta) => {root.record-pressed(2,text,ctrl,alt,shift,meta);}
+                    release => {root.record-released(2);}
+                }
+                HotkeyRecorder {
+                    label: "自动翻页"; recording: root.recording-index == 3;
+                    caps: root.key-caps(self.recording ? root.recording-preview : root.auto-key);
+                    error: self.recording ? root.recording-error : root.key-errors[3];
+                    begin => {root.begin-recording(3);}
+                    cancel => {root.cancel-recording(3);}
+                    press(text,ctrl,alt,shift,meta) => {root.record-pressed(3,text,ctrl,alt,shift,meta);}
+                    release => {root.record-released(3);}
+                }
+                HotkeyRecorder {
+                    label: "找回窗口"; recording: root.recording-index == 4;
+                    caps: root.key-caps(self.recording ? root.recording-preview : root.rescue-key);
+                    error: self.recording ? root.recording-error : root.key-errors[4];
+                    begin => {root.begin-recording(4);}
+                    cancel => {root.cancel-recording(4);}
+                    press(text,ctrl,alt,shift,meta) => {root.record-pressed(4,text,ctrl,alt,shift,meta);}
+                    release => {root.record-released(4);}
+                }
+                Rectangle { vertical-stretch: 1; }
+            } }
+            if root.section == 5: VerticalBox {
+                spacing: 16px;
+                HorizontalBox { padding: 0px; spacing: 16px;
+                    Image { width: 64px; height: 64px; source: @image-url("../assets/loafing-reader.png"); }
+                    Text { text: "Loafing Reader"; font-size: 24px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+                Text { text: "制作者：扯蛋虾米　版本号：0.1"; font-size: 16px; wrap: word-wrap; }
+                Text { text: "如果喜欢这款软件，欢迎前往 GitHub 点一个 Star，支持作者持续改进。"; font-size: 14px; wrap: word-wrap; }
+                HorizontalBox { padding: 0px; spacing: 8px;
+                    Button { text: "https://github.com/RichardM95/Thief-Reader"; accessible-label: "前往 GitHub 为 Loafing Reader 点 Star"; clicked => { Platform.open-url("https://github.com/RichardM95/Thief-Reader"); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalBox { padding: 0px; spacing: 8px;
+                    Button { text: "第三方许可"; clicked => { component-license.show(); } }
+                    Rectangle { horizontal-stretch: 1; }
                 }
             }
+            Rectangle { height: 1px; background: Palette.border; }
+            HorizontalBox {
+                padding: 0px; spacing: 8px;
+                Text { text: root.section > 0 && root.section < 5 ? (root.dirty[root.section] ? "有未应用的更改" : "已应用") : root.status; color: Palette.foreground.darker(0.25); font-size: 12px; overflow: elide; horizontal-stretch: 1; }
+                if root.section > 0 && root.section < 5: Button { text: "还原更改"; enabled: root.dirty[root.section]; clicked => { root.revert-current(); } }
+                if root.section > 0 && root.section < 5: Button { text: "应用更改"; primary: true; enabled: root.dirty[root.section] && root.recording-index < 0; clicked => { root.apply-current(); } }
+            }
+            if root.section > 0 && root.section < 5: Text { text: root.status; font-size: 12px; color: Palette.foreground; opacity: 0.72; overflow: elide; }
         }
-        Rectangle {
-            height: 38px;
-            background: #6878d511;
-            Text { x: 20px; y: 10px; width: parent.width - 40px; text: root.status; overflow: elide; font-size: 12px; }
+    }
+    component-license := PopupWindow {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 360px; height: 290px;
+        Rectangle { background: Palette.background; border-color: Palette.border; border-width: 1px; border-radius: 6px;
+            VerticalBox { padding: 16px; spacing: 12px;
+                Text { text: "第三方组件许可"; font-size: 16px; font-weight: 600; }
+                AboutSlint { }
+                HorizontalBox { padding: 0px;
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { text: "关闭"; clicked => { component-license.close(); } }
+                }
+            }
         }
     }
 }

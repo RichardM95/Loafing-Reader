@@ -67,6 +67,27 @@ fn tray_matches_requested_actions() {
         .collect();
     assert_eq!(
         labels,
-        vec!["系统设置", "显示 / 隐藏", "自动翻页", "窗口找回", "退出"]
+        vec!["系统设置", "显示 / 隐藏", "自动翻页", "找回窗口", "退出"]
     );
+}
+
+#[test]
+fn application_icon_covers_windows_sizes() {
+    let ico = include_bytes!("../assets/loafing-reader.ico");
+    assert_eq!(&ico[..4], &[0, 0, 1, 0]);
+    let count = u16::from_le_bytes([ico[4], ico[5]]) as usize;
+    assert_eq!(count, 9);
+    let sizes: Vec<_> = (0..count)
+        .map(|i| {
+            let entry = &ico[6 + i * 16..6 + (i + 1) * 16];
+            assert_eq!(entry[0], entry[1]);
+            let size = if entry[0] == 0 { 256 } else { entry[0] as u16 };
+            let len = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+            let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
+            assert!(offset + len <= ico.len());
+            assert_eq!(&ico[offset..offset + 8], b"\x89PNG\r\n\x1a\n");
+            size
+        })
+        .collect();
+    assert_eq!(sizes, vec![16, 20, 24, 32, 40, 48, 64, 128, 256]);
 }

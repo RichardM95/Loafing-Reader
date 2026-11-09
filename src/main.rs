@@ -11,7 +11,7 @@ fn main() {
             let _ = windows::Win32::UI::WindowsAndMessaging::MessageBoxW(
                 None,
                 windows::core::PCWSTR(native::wide(&e).as_ptr()),
-                windows::core::w!("Thief Reader"),
+                windows::core::w!("Loafing Reader"),
                 windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
             );
         }
@@ -48,6 +48,7 @@ fn run() -> Result<(), String> {
         let weak = window.as_weak();
         move || {
             if let Some(ui) = weak.upgrade() {
+                ui.invoke_cancel_recording(-1);
                 let _ = ui.hide();
             }
             slint::CloseRequestResponse::KeepWindowShown
