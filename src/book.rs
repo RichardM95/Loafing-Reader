@@ -17,6 +17,28 @@ pub struct Document {
     pub encoding: String,
 }
 
+impl Document {
+    /// Directory entries define sections, including any introduction before the first title.
+    pub fn chapter_range(&self, offset: usize) -> std::ops::Range<usize> {
+        let length = self.text.len();
+        let index = self
+            .chapters
+            .partition_point(|chapter| chapter.start <= offset.min(length));
+        let start = index
+            .checked_sub(1)
+            .map(|i| self.chapters[i].start)
+            .unwrap_or(0)
+            .min(length);
+        let end = self
+            .chapters
+            .get(index)
+            .map(|chapter| chapter.start)
+            .unwrap_or(length)
+            .min(length);
+        start..end.max(start)
+    }
+}
+
 pub fn decode(raw: &[u8], label: &str) -> Result<String, String> {
     let encoding = if label != "auto" {
         encoding_rs::Encoding::for_label(label.as_bytes()).ok_or("未知编码")?

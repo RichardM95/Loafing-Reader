@@ -121,6 +121,9 @@ export component AppWindow inherits Window {
     in-out property <string> book-name: "打开一本小说，继续阅读";
     in-out property <string> status: "就绪";
     in-out property <float> progress: 0;
+    in-out property <int> progress-mode: 1;
+    callback change-progress-mode(int);
+    in property <string> progress-label: "0.00%";
     in-out property <[string]> rows;
     in-out property <int> selected: -1;
     in-out property <string> query;
@@ -238,7 +241,11 @@ export component AppWindow inherits Window {
             if root.section == 0: VerticalBox {
                 spacing: 12px;
                 Text { text: root.book-name; font-size: 16px; font-weight: 600; overflow: elide; }
-                Text { text: "阅读进度 " + round(root.progress * 1000) / 10 + "%"; color: Palette.foreground.darker(0.25); font-size: 12px; }
+                HorizontalBox {
+                    padding: 0px; spacing: 12px;
+                    Text { text: (root.progress-mode == 0 ? "全书进度 " : "本章进度 ") + root.progress-label; color: Palette.foreground.darker(0.25); font-size: 12px; horizontal-stretch: 1; }
+                    ComboBox { width: 160px; model: ["全书进度", "章节进度"]; current-index <=> root.progress-mode; selected => { root.change-progress-mode(root.progress-mode); } }
+                }
                 HorizontalBox {
                     if root.advanced: ComboBox { model: ["auto", "utf-8", "utf-16le", "utf-16be", "gbk", "gb18030", "big5"]; selected(value) => { root.encoding = value; root.change-encoding(); } }
                     Button { text: "章节目录"; clicked => { root.show-chapters(); } }
@@ -331,7 +338,7 @@ export component AppWindow inherits Window {
                     ColorField { label: "文字颜色"; swatch: root.foreground-swatch; value <=> root.foreground; alpha <=> root.foreground-alpha; error: root.color-errors[0]; changed => { root.draft-changed(); } }
                     ColorField { label: "背景颜色"; swatch: root.background-swatch; value <=> root.background-color; alpha <=> root.background-alpha; error: root.color-errors[1]; changed => { root.draft-changed(); } }
                     Heading { title: "正文显示"; }
-                    CheckBox { text: "显示行末页码"; checked <=> root.page-numbers; toggled => { root.draft-changed(); } }
+                    CheckBox { text: "显示行末阅读进度"; checked <=> root.page-numbers; toggled => { root.draft-changed(); } }
                 } }
             }
             if root.section == 2: ScrollView { VerticalBox {

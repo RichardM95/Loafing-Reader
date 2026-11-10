@@ -23,6 +23,7 @@ pub const TRAY_ITEMS: [(usize, &str); 5] = [
 ];
 pub const TRAY: u32 = WM_APP + 7;
 const TOPMOST_TIMER: usize = 16;
+const RESIZE_TIMER: usize = 17;
 #[derive(Clone, Copy)]
 pub enum Action {
     Previous,
@@ -33,10 +34,20 @@ pub enum Action {
     Control,
     Quit,
     Geometry,
+    ResizeBegin(Rect, u32),
+    ResizeFrame,
+    ResizeEnd,
+    AutoTick,
     Topology,
 }
 static EVENT: OnceLock<Box<dyn Fn(Action) + Send + Sync>> = OnceLock::new();
-thread_local! { static MOUSE: Cell<bool> = const { Cell::new(false) }; }
+thread_local! {
+    static MOUSE: Cell<bool> = const { Cell::new(false) };
+    static SIZING: Cell<bool> = const { Cell::new(false) };
+    static SIZE_DIRTY: Cell<bool> = const { Cell::new(false) };
+    static LAST_SIZE: Cell<isize> = const { Cell::new(0) };
+    static MINIMUM: Cell<(f32, f32)> = const { Cell::new((100., 24.)) };
+}
 pub fn on_event(callback: impl Fn(Action) + Send + Sync + 'static) {
     let _ = EVENT.set(Box::new(callback));
 }
@@ -171,6 +182,9 @@ impl Reader {
             }
             errors
         }
+    }
+    pub fn minimum_size(&self, size: (f32, f32)) {
+        MINIMUM.set(size);
     }
     pub fn present(&self, pixels: &[u8], width: i32, height: i32) -> Result<()> {
         unsafe {
@@ -325,13 +339,53 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 3 => Action::Auto,
                 _ => Action::Rescue,
             }),
-            WM_TIMER if w.0 == 15 => emit(Action::Next),
+            WM_TIMER if w.0 == 15 => emit(Action::AutoTick),
+            WM_ENTERSIZEMOVE => {
+                SIZING.set(true);
+                SIZE_DIRTY.set(false);
+                let mut rect = RECT::default();
+                let _ = GetWindowRect(hwnd, &mut rect);
+                LAST_SIZE.set(
+                    ((rect.bottom - rect.top) as isize) << 16 | (rect.right - rect.left) as isize,
+                );
+                SetTimer(Some(hwnd), RESIZE_TIMER, 33, None);
+                emit(Action::ResizeBegin(
+                    Rect {
+                        x: rect.left,
+                        y: rect.top,
+                        width: rect.right - rect.left,
+                        height: rect.bottom - rect.top,
+                    },
+                    GetDpiForWindow(hwnd).max(96),
+                ));
+            }
+            WM_SIZE if SIZING.get() => {
+                if LAST_SIZE.replace(l.0) != l.0 {
+                    SIZE_DIRTY.set(true);
+                }
+            }
+            WM_TIMER if w.0 == RESIZE_TIMER => {
+                if SIZE_DIRTY.replace(false) {
+                    emit(Action::ResizeFrame);
+                }
+            }
+            WM_GETMINMAXINFO => {
+                let limits = &mut *(l.0 as *mut MINMAXINFO);
+                let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
+                let (width, height) = MINIMUM.get();
+                limits.ptMinTrackSize.x = (width * scale).ceil() as i32;
+                limits.ptMinTrackSize.y = (height * scale).ceil() as i32;
+                return LRESULT(0);
+            }
             WM_TIMER if w.0 == TOPMOST_TIMER => {
                 maintain_topmost(hwnd);
             }
             WM_EXITSIZEMOVE => {
+                SIZING.set(false);
+                SIZE_DIRTY.set(false);
+                let _ = KillTimer(Some(hwnd), RESIZE_TIMER);
                 maintain_topmost(hwnd);
-                emit(Action::Geometry);
+                emit(Action::ResizeEnd);
             }
             WM_DISPLAYCHANGE | WM_SETTINGCHANGE => emit(Action::Topology),
             WM_DPICHANGED => {
@@ -634,6 +688,117 @@ impl TextEngine {
                 && metrics.widthIncludingTrailingWhitespace <= width + 0.05
         }
     }
+    pub fn minimum_viewport(&self, style: &Style, footer: &str) -> (f32, f32) {
+        let fallback = (100., 24_f32.max(style.size * style.line_height * 1.6));
+        let Ok(format) = self.format(style) else {
+            return fallback;
+        };
+        let Ok(layout) = self.layout(&format!("国{footer}"), style, &format, 100000., 100000.)
+        else {
+            return fallback;
+        };
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        if unsafe { layout.GetMetrics(&mut metrics) }.is_err() {
+            return fallback;
+        }
+        (
+            100_f32.max(metrics.widthIncludingTrailingWhitespace.ceil() + 20.),
+            24_f32.max(metrics.height.ceil()),
+        )
+    }
+    pub fn progress_reservation(&self, style: &Style) -> String {
+        if !style.page_numbers {
+            return String::new();
+        }
+        let Ok(format) = self.format(style) else {
+            return "  本章 100.00%".into();
+        };
+        let mut widest = '8';
+        let mut max_width = 0.;
+        for digit in '0'..='9' {
+            if let Ok(layout) = self.layout(&digit.to_string(), style, &format, 1000., 1000.) {
+                let mut metrics = DWRITE_TEXT_METRICS::default();
+                if unsafe { layout.GetMetrics(&mut metrics) }.is_ok()
+                    && metrics.widthIncludingTrailingWhitespace > max_width
+                {
+                    max_width = metrics.widthIncludingTrailingWhitespace;
+                    widest = digit;
+                }
+            }
+        }
+        ["本章", "全书"]
+            .map(|label| format!("  {label} {widest}{widest}{widest}.{widest}{widest}%"))
+            .into_iter()
+            .max_by(|a, b| {
+                let width = |text: &str| {
+                    let mut m = DWRITE_TEXT_METRICS::default();
+                    self.layout(text, style, &format, 10000., 10000.)
+                        .and_then(|layout| unsafe { layout.GetMetrics(&mut m) })
+                        .ok();
+                    m.widthIncludingTrailingWhitespace
+                };
+                width(a).total_cmp(&width(b))
+            })
+            .unwrap_or_default()
+    }
+    /// Only inspect the suffix needed to fill one screen before an arbitrary anchor.
+    pub fn previous_page(
+        &self,
+        text: &str,
+        end: usize,
+        style: &Style,
+        width: f32,
+        height: f32,
+    ) -> Page {
+        use unicode_segmentation::UnicodeSegmentation;
+        let end = book::boundary(text, end);
+        let footer = self.progress_reservation(style);
+        let mut starts = Vec::new();
+        let mut limit = 64;
+        let mut graphemes = text[..end].grapheme_indices(true).rev();
+        let fits = |start| {
+            self.text_fits(
+                &format!("{}{footer}", text[start..end].trim_matches(['\r', '\n'])),
+                style,
+                (width - 20.).max(1.),
+                height,
+            )
+        };
+        loop {
+            let mut exhausted = false;
+            while starts.len() < limit {
+                if let Some((start, _)) = graphemes.next() {
+                    starts.push(start);
+                } else {
+                    exhausted = true;
+                    break;
+                }
+            }
+            if exhausted || starts.last().is_some_and(|start| !fits(*start)) {
+                break;
+            }
+            limit = limit.saturating_mul(2);
+        }
+        let mut low = 0;
+        let mut high = starts.len();
+        while low < high {
+            let mid = (low + high).div_ceil(2);
+            if fits(starts[mid - 1]) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        let start = if starts.is_empty() {
+            end
+        } else {
+            starts[low.max(1) - 1]
+        };
+        Page {
+            end,
+            text: text[start..end].into(),
+        }
+    }
     pub fn footer_reservation(&self, style: &Style, count: usize) -> String {
         if !style.page_numbers {
             return String::new();
@@ -654,7 +819,25 @@ impl TextEngine {
             }
         }
         let digits = widest.to_string().repeat(count.max(1).to_string().len());
-        format!("  {digits}/{digits}")
+        let number = format!("  {digits}/{digits}");
+        [
+            number,
+            "  （页码计算中...）".into(),
+            "  （页码不可用）".into(),
+        ]
+        .into_iter()
+        .max_by(|a, b| {
+            let width = |text: &str| {
+                let mut m = DWRITE_TEXT_METRICS::default();
+                self.format(style)
+                    .and_then(|f| self.layout(text, style, &f, 100000., 100000.))
+                    .and_then(|l| unsafe { l.GetMetrics(&mut m) })
+                    .ok();
+                m.widthIncludingTrailingWhitespace
+            };
+            width(a).total_cmp(&width(b))
+        })
+        .unwrap_or_default()
     }
     pub fn page(&self, text: &str, start: usize, style: &Style, width: f32, height: f32) -> Page {
         let footer = self.footer_reservation(style, 1);
@@ -861,5 +1044,95 @@ pub fn single_instance() -> Result<Option<InstanceGuard>> {
             return Ok(None);
         }
         Ok(Some(InstanceGuard(mutex)))
+    }
+}
+
+#[cfg(test)]
+mod resize_messages {
+    use super::*;
+    use std::sync::Mutex;
+    static EVENTS: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+    #[test]
+    fn coalesces_size_messages_without_visibility_or_activation() {
+        on_event(|e| {
+            let v = match e {
+                Action::ResizeBegin(..) => 1,
+                Action::ResizeFrame => 2,
+                Action::ResizeEnd => 3,
+                _ => 0,
+            };
+            if v != 0 {
+                EVENTS.lock().unwrap().push(v);
+            }
+        });
+        unsafe {
+            let foreground = GetForegroundWindow();
+            let instance = GetModuleHandleW(None).unwrap();
+            let class = w!("LoafingResizeOffscreenTest");
+            RegisterClassW(&WNDCLASSW {
+                lpfnWndProc: Some(procedure),
+                hInstance: instance.into(),
+                lpszClassName: class,
+                ..Default::default()
+            });
+            let hwnd = CreateWindowExW(
+                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                class,
+                w!("offscreen"),
+                WS_POPUP,
+                -32000,
+                -32000,
+                120,
+                60,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .unwrap();
+            SendMessageW(hwnd, WM_ENTERSIZEMOVE, None, None);
+            SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                180,
+                80,
+                SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+            .unwrap();
+            SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                200,
+                90,
+                SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+            .unwrap();
+            SendMessageW(hwnd, WM_TIMER, Some(WPARAM(RESIZE_TIMER)), None);
+            SendMessageW(hwnd, WM_TIMER, Some(WPARAM(RESIZE_TIMER)), None);
+            SendMessageW(hwnd, WM_EXITSIZEMOVE, None, None);
+            assert_eq!(*EVENTS.lock().unwrap(), vec![1, 2, 3]);
+            EVENTS.lock().unwrap().clear();
+            SendMessageW(hwnd, WM_ENTERSIZEMOVE, None, None);
+            SetWindowPos(
+                hwnd,
+                None,
+                -31999,
+                -31999,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+            .unwrap();
+            SendMessageW(hwnd, WM_TIMER, Some(WPARAM(RESIZE_TIMER)), None);
+            SendMessageW(hwnd, WM_EXITSIZEMOVE, None, None);
+            assert_eq!(*EVENTS.lock().unwrap(), vec![1, 3]);
+            assert!(!IsWindowVisible(hwnd).as_bool());
+            assert_eq!(GetForegroundWindow(), foreground);
+            DestroyWindow(hwnd).unwrap();
+        }
     }
 }

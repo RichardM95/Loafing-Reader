@@ -85,3 +85,60 @@ mod shortcut_tests {
         assert_eq!(count, 1);
     }
 }
+
+/// Reading progress uses the persisted UTF-8 anchor, independent of viewport size.
+pub fn progress(offset: usize, length: usize) -> f32 {
+    if length == 0 {
+        0.
+    } else {
+        offset.min(length) as f32 / length as f32
+    }
+}
+pub fn progress_footer(enabled: bool, offset: usize, length: usize) -> String {
+    if enabled {
+        format!("  {:.2}%", progress(offset, length) * 100.)
+    } else {
+        String::new()
+    }
+}
+
+pub fn chapter_progress(doc: &crate::book::Document, offset: usize) -> f32 {
+    let range = doc.chapter_range(offset);
+    progress(offset.saturating_sub(range.start), range.len())
+}
+pub fn chapter_footer(enabled: bool, doc: &crate::book::Document, offset: usize) -> String {
+    if enabled {
+        format!("  本章 {:.2}%", chapter_progress(doc, offset) * 100.)
+    } else {
+        String::new()
+    }
+}
+
+pub fn display_progress(
+    mode: crate::settings::ProgressMode,
+    doc: &crate::book::Document,
+    offset: usize,
+) -> f32 {
+    match mode {
+        crate::settings::ProgressMode::WholeBook => progress(offset, doc.text.len()),
+        crate::settings::ProgressMode::Chapter => chapter_progress(doc, offset),
+    }
+}
+pub fn display_footer(
+    enabled: bool,
+    mode: crate::settings::ProgressMode,
+    doc: &crate::book::Document,
+    offset: usize,
+) -> String {
+    if !enabled {
+        return String::new();
+    }
+    let label = match mode {
+        crate::settings::ProgressMode::WholeBook => "全书",
+        crate::settings::ProgressMode::Chapter => "本章",
+    };
+    format!(
+        "  {label} {:.2}%",
+        display_progress(mode, doc, offset) * 100.
+    )
+}

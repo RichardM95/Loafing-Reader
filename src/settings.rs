@@ -67,9 +67,18 @@ impl Rect {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressMode {
+    WholeBook,
+    #[default]
+    Chapter,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub progress_mode: ProgressMode,
     pub style: Style,
     pub rect: Rect,
     pub monitor: String,
@@ -85,6 +94,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            progress_mode: ProgressMode::default(),
             style: Style::default(),
             rect: Rect::default(),
             monitor: String::new(),

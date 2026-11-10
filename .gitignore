@@ -1,18 +1,36 @@
-# Rust build output, portable packages, and this machine's toolchain
+# Build output, packages, and local toolchain
 /target/
 /dist/
 /.tools/
 
-# Local CodeGraph indexes (Windows / WSL)
-/.codegraph/
-/.codegraph-wsl/
+# Local documentation, tests, and development helpers
+/docs/
+/tests/
+/examples/
+/tools/
+/.cargo/config.toml
 
-# Python icon-generation helper caches
+# Local CodeGraph indexes
+/.codegraph/
+/.codegraph-*/
+
+# Python caches, logs, and OS metadata
 __pycache__/
 *.py[cod]
-
-# Development logs and OS metadata
 *.log
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Local editor state
+/.vs/
+/.vscode/
+/.idea/
+*.swp
+*.swo
+
+# Root-level temporary and conflict files
+/*.tmp
+/*.bak
+/*.orig
+/*.rej

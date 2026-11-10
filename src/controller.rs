@@ -3,15 +3,8 @@ use crate::{
     native::{self, Action, Reader, Screen, TextEngine},
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
-use std::{
-    cell::RefCell,
-    path::PathBuf,
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
+use thief_reader::preferences::{display_footer, display_progress};
 use thief_reader::{
     book::{self, Document},
     settings::{self, Rect, Settings},
@@ -26,8 +19,9 @@ pub struct Controller {
     document: Option<Document>,
     offset: usize,
     end: usize,
-    pages: Vec<usize>,
-    history: Vec<usize>,
+    history: Vec<(usize, usize)>,
+    forward: Vec<(usize, usize)>,
+    page_end: Option<usize>,
     rows: Vec<usize>,
     recent: Vec<String>,
     is_recent: bool,
@@ -35,10 +29,9 @@ pub struct Controller {
     screens: Vec<Screen>,
     load_generation: u64,
     search_generation: u64,
-    layout_generation: Arc<AtomicU64>,
     save_timer: slint::Timer,
     preview_timer: slint::Timer,
-    layout_key: String,
+    resizing: Option<(i32, i32, u32)>,
     recorder: thief_reader::hotkeys::Recorder,
 }
 fn strings(values: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
@@ -72,8 +65,9 @@ impl Controller {
             document: None,
             offset: 0,
             end: 0,
-            pages: vec![],
             history: vec![],
+            forward: vec![],
+            page_end: None,
             rows: vec![],
             recent: vec![],
             is_recent: false,
@@ -81,10 +75,9 @@ impl Controller {
             screens: vec![],
             load_generation: 0,
             search_generation: 0,
-            layout_generation: Arc::new(AtomicU64::new(0)),
             save_timer: slint::Timer::default(),
             preview_timer: slint::Timer::default(),
-            layout_key: String::new(),
+            resizing: None,
             recorder: thief_reader::hotkeys::Recorder::default(),
         })
     }
@@ -204,6 +197,15 @@ impl Controller {
     }
     pub fn startup(&mut self) {
         self.sync_style();
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_progress_mode(
+                if self.settings.progress_mode == settings::ProgressMode::WholeBook {
+                    0
+                } else {
+                    1
+                },
+            );
+        }
         self.refresh_screens(false);
         self.reader.mouse(self.settings.mouse);
         let errors = self.register_hotkeys();
@@ -286,6 +288,7 @@ impl Controller {
     }
     pub fn open(&mut self, path: PathBuf, encoding: Option<String>) {
         self.persist();
+        self.invalidate_layout();
         self.load_generation += 1;
         self.search_generation += 1;
         let generation = self.load_generation;
@@ -312,8 +315,8 @@ impl Controller {
                             Ok(doc) => {
                                 c.settings.current = doc.path.to_string_lossy().into_owned();
                                 c.offset = book::boundary(&doc.text, memo.offset);
-                                c.history.clear();
-                                c.pages.clear();
+                                c.invalidate_layout();
+                                c.invalidate_layout();
                                 c.document = Some(doc);
                                 if let Some(ui) = c.ui.upgrade() {
                                     ui.set_rule(memo.rule.into());
@@ -321,10 +324,13 @@ impl Controller {
                                 }
                                 c.show_chapters();
                                 c.draw();
-                                c.index();
+                                c.status("正文与目录已就绪");
                                 c.save_later();
                             }
-                            Err(e) => c.status(e),
+                            Err(e) => {
+                                c.status(e);
+                                c.draw();
+                            }
                         }
                     }
                 })
@@ -338,41 +344,32 @@ impl Controller {
         }
         let dpi = self.reader.dpi();
         let display = if let Some(doc) = &self.document {
-            let start = if self.pages.is_empty() {
-                self.offset
-            } else {
-                self.pages[self
-                    .pages
-                    .partition_point(|x| *x <= self.offset)
-                    .saturating_sub(1)]
-            };
-            let footer = if self.settings.style.page_numbers {
-                if self.pages.is_empty() {
-                    "  …/…".into()
-                } else {
-                    format!(
-                        "  {}/{}",
-                        self.pages.partition_point(|x| *x <= self.offset).max(1),
-                        self.pages.len()
-                    )
+            let start = self.offset;
+            let footer = display_footer(
+                self.settings.style.page_numbers,
+                self.settings.progress_mode,
+                doc,
+                start,
+            );
+            let reservation = self.engine.progress_reservation(&self.settings.style);
+            let page = if let Some(end) = self.page_end {
+                native::Page {
+                    end,
+                    text: doc.text[start..end].to_owned(),
                 }
             } else {
-                String::new()
+                self.engine.page_with_footer(
+                    &doc.text,
+                    start,
+                    &self.settings.style,
+                    rect.width as f32 / dpi,
+                    rect.height as f32 / dpi,
+                    &reservation,
+                )
             };
-            let reservation = if self.pages.is_empty() {
+            self.reader.minimum_size(
                 self.engine
-                    .footer_reservation(&self.settings.style, doc.text.len())
-            } else {
-                self.engine
-                    .footer_reservation(&self.settings.style, self.pages.len())
-            };
-            let page = self.engine.page_with_footer(
-                &doc.text,
-                start,
-                &self.settings.style,
-                rect.width as f32 / dpi,
-                rect.height as f32 / dpi,
-                &reservation,
+                    .minimum_viewport(&self.settings.style, &reservation),
             );
             self.end = page.end;
             if let Some(ui) = self.ui.upgrade() {
@@ -384,7 +381,18 @@ impl Controller {
                         .into_owned()
                         .into(),
                 );
-                ui.set_progress(self.offset as f32 / doc.text.len().max(1) as f32);
+                ui.set_progress(display_progress(
+                    self.settings.progress_mode,
+                    doc,
+                    self.offset,
+                ));
+                ui.set_progress_label(
+                    format!(
+                        "{:.2}%",
+                        display_progress(self.settings.progress_mode, doc, self.offset) * 100.
+                    )
+                    .into(),
+                );
             }
             page.display(&footer)
         } else {
@@ -407,90 +415,21 @@ impl Controller {
             Err(e) => self.status(e.to_string()),
         }
     }
-    fn index(&mut self) {
-        let Some(doc) = self.document.clone() else {
+    fn invalidate_layout(&mut self) {
+        self.history.clear();
+        self.forward.clear();
+        self.page_end = None;
+    }
+    fn resize_frame(&mut self) {
+        let Some((width, height, dpi)) = self.resizing else {
             return;
         };
-        let style = self.settings.style.clone();
-        let fonts = self.settings.fonts.clone();
-        let rect = self.reader.rect();
-        let dpi = self.reader.dpi();
-        let (width, height) = (rect.width as f32 / dpi, rect.height as f32 / dpi);
-        let mut layout_style = style.clone();
-        layout_style.foreground = 0;
-        layout_style.background = 0;
-        let cache_key = blake3::hash(
-            format!(
-                "v3-auto-lines/{}/{:?}/{width}/{height}/{fonts:?}",
-                doc.hash, layout_style
-            )
-            .as_bytes(),
-        )
-        .to_hex()
-        .to_string();
-        if self.layout_key == cache_key {
-            return;
+        let r = self.reader.rect();
+        let current_dpi = (self.reader.dpi() * 96.).round() as u32;
+        if (r.width, r.height, current_dpi) != (width, height, dpi) {
+            self.invalidate_layout();
+            self.draw();
         }
-        self.layout_key = cache_key.clone();
-        self.pages.clear();
-        let token = self.layout_generation.clone();
-        let id = token.fetch_add(1, Ordering::Relaxed) + 1;
-        let cache = self
-            .directory
-            .join("cache")
-            .join(format!("{cache_key}.json"));
-        self.status("正文已就绪，正在计算准确页码…");
-        std::thread::spawn(move || {
-            unsafe {
-                let _ = windows::Win32::System::Threading::SetThreadPriority(
-                    windows::Win32::System::Threading::GetCurrentThread(),
-                    windows::Win32::System::Threading::THREAD_PRIORITY_BELOW_NORMAL,
-                );
-            }
-            let result = (|| -> Result<Vec<usize>, String> {
-                if let Ok(data) = std::fs::read(&cache)
-                    && let Ok(pages) = serde_json::from_slice::<Vec<usize>>(&data)
-                    && pages.first() == Some(&0)
-                    && pages.windows(2).all(|x| x[0] < x[1])
-                    && pages
-                        .iter()
-                        .all(|x| *x < doc.text.len() && doc.text.is_char_boundary(*x))
-                {
-                    return Ok(pages);
-                }
-                let mut engine = TextEngine::new().map_err(|e| e.to_string())?;
-                engine.load_fonts(&fonts).map_err(|e| e.to_string())?;
-                let pages = engine.paginate(&doc.text, &style, width, height, || {
-                    token.load(Ordering::Relaxed) != id
-                })?;
-                if let Some(parent) = cache.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Ok(bytes) = serde_json::to_vec(&pages) {
-                    let _ = std::fs::write(&cache, bytes);
-                }
-                Ok(pages)
-            })();
-            let _ = slint::invoke_from_event_loop(move || {
-                crate::APP.with(|app| {
-                    if let Some(c) = app.borrow().as_ref() {
-                        let mut c = c.borrow_mut();
-                        if c.layout_generation.load(Ordering::Relaxed) != id {
-                            return;
-                        }
-                        match result {
-                            Ok(pages) => {
-                                c.pages = pages;
-                                c.status(format!("目录与分页已就绪，共 {} 页", c.pages.len()));
-                                c.draw();
-                            }
-                            Err(e) if e != "cancelled" => c.status(e),
-                            _ => (),
-                        }
-                    }
-                })
-            });
-        });
     }
     fn show_chapters(&mut self) {
         self.is_recent = false;
@@ -559,6 +498,7 @@ impl Controller {
                         .or_default()
                         .rule = rule;
                     self.show_chapters();
+                    self.draw();
                     self.save_later();
                 } else {
                     self.rows = chapters.iter().map(|x| x.start).collect();
@@ -631,23 +571,55 @@ impl Controller {
         let r = self.reader.rect();
         let dpi = self.reader.dpi();
         let display = if let Some(doc) = &self.document {
-            let footer = if style.page_numbers { "  …/…" } else { "" };
+            let footer = display_footer(
+                style.page_numbers,
+                self.settings.progress_mode,
+                doc,
+                self.offset,
+            );
+            let start = self.offset;
+            let reservation = self.engine.progress_reservation(&style);
+            if let Some(end) = self.page_end.filter(|_| {
+                !thief_reader::preferences::layout_changed(&self.settings.style, &style)
+            }) {
+                return self.publish_preview(
+                    &ui,
+                    &style,
+                    r,
+                    dpi,
+                    &native::Page {
+                        end,
+                        text: doc.text[start..end].into(),
+                    }
+                    .display(&footer),
+                );
+            }
             self.engine
                 .page_with_footer(
                     &doc.text,
-                    self.offset,
+                    start,
                     &style,
                     r.width as f32 / dpi,
                     r.height as f32 / dpi,
-                    footer,
+                    &reservation,
                 )
-                .display(footer)
+                .display(&footer)
         } else {
             ui.get_disguise().to_string()
         };
+        self.publish_preview(&ui, &style, r, dpi, &display);
+    }
+    fn publish_preview(
+        &self,
+        ui: &AppWindow,
+        style: &settings::Style,
+        r: Rect,
+        dpi: f32,
+        display: &str,
+    ) {
         if let Ok(mut pixels) = self.engine.render_aligned(
-            &display,
-            &style,
+            display,
+            style,
             r.width as u32,
             r.height as u32,
             dpi,
@@ -708,14 +680,10 @@ impl Controller {
         let changed = thief_reader::preferences::layout_changed(&self.settings.style, &style);
         self.settings.style = style;
         if changed {
-            self.pages.clear();
-            self.layout_key.clear();
-            self.layout_generation.fetch_add(1, Ordering::Relaxed);
+            self.invalidate_layout();
         }
         self.draw();
-        if changed {
-            self.index();
-        }
+
         self.persist();
         self.clear_dirty(1);
         self.status("外观已应用");
@@ -904,8 +872,8 @@ impl Controller {
             );
             self.screen_model(index);
         }
+
         self.draw();
-        self.index();
         self.save_later();
     }
     fn import_font(&mut self) {
@@ -946,13 +914,37 @@ impl Controller {
     }
     pub fn action(&mut self, action: Action) {
         match action {
+            Action::ResizeBegin(rect, dpi) => {
+                self.resizing = Some((rect.width, rect.height, dpi));
+            }
+            Action::ResizeFrame => self.resize_frame(),
+            Action::ResizeEnd => {
+                self.resize_frame();
+                self.resizing = None;
+                self.geometry();
+            }
+            Action::AutoTick => {
+                if self.resizing.is_none() && self.automatic && self.reader.visible() {
+                    self.action(Action::Next);
+                }
+            }
             Action::Next => {
                 if self.document.is_some()
                     && self.end > self.offset
                     && self.end < self.document.as_ref().unwrap().text.len()
                 {
-                    self.history.push(self.offset);
+                    self.history.push((self.offset, self.end));
                     self.offset = self.end;
+                    self.page_end = if self
+                        .forward
+                        .last()
+                        .is_some_and(|(start, _)| *start == self.offset)
+                    {
+                        self.forward.pop().map(|(_, end)| end)
+                    } else {
+                        self.forward.clear();
+                        None
+                    };
                     self.draw();
                     self.save_later();
                 } else if self.automatic {
@@ -961,14 +953,27 @@ impl Controller {
                 }
             }
             Action::Previous => {
-                if let Some(offset) = self.history.pop() {
-                    self.offset = offset;
-                } else if !self.pages.is_empty() {
-                    let index = self
-                        .pages
-                        .partition_point(|x| *x < self.offset)
-                        .saturating_sub(1);
-                    self.offset = self.pages[index];
+                if self.offset == 0 {
+                    return;
+                }
+                if self.offset > 0 {
+                    self.forward.push((self.offset, self.end));
+                }
+                if let Some((start, end)) = self.history.pop() {
+                    self.offset = start;
+                    self.page_end = Some(end);
+                } else if let Some(doc) = &self.document {
+                    let r = self.reader.rect();
+                    let dpi = self.reader.dpi();
+                    let page = self.engine.previous_page(
+                        &doc.text,
+                        self.offset,
+                        &self.settings.style,
+                        r.width as f32 / dpi,
+                        r.height as f32 / dpi,
+                    );
+                    self.offset = page.end - page.text.len();
+                    self.page_end = Some(page.end);
                 }
                 self.draw();
                 self.save_later();
@@ -1010,13 +1015,18 @@ impl Controller {
             Action::Quit => {
                 self.cancel_recording(-1);
                 self.persist();
-                self.layout_generation.fetch_add(1, Ordering::Relaxed);
                 let _ = slint::quit_event_loop();
             }
-            Action::Geometry => self.geometry(),
+            Action::Geometry => {
+                if self.resizing.is_some() {
+                    self.resize_frame();
+                } else {
+                    self.geometry();
+                }
+            }
             Action::Topology => {
+                self.invalidate_layout();
                 self.refresh_screens(false);
-                self.index();
             }
         }
     }
@@ -1030,6 +1040,20 @@ pub fn connect(ui: &AppWindow, c: &Rc<RefCell<Controller>>) {
                 ($body)(&mut c);
             });
         }};
+    }
+    {
+        let c = c.clone();
+        ui.on_change_progress_mode(move |index| {
+            let mode = match index {
+                0 => settings::ProgressMode::WholeBook,
+                1 => settings::ProgressMode::Chapter,
+                _ => return,
+            };
+            let mut c = c.borrow_mut();
+            c.settings.progress_mode = mode;
+            c.draw();
+            c.persist();
+        });
     }
     ui.on_key_caps(|value| strings(thief_reader::hotkeys::keycaps(&value)));
     {
@@ -1084,7 +1108,7 @@ pub fn connect(ui: &AppWindow, c: &Rc<RefCell<Controller>>) {
                 }
             } else if let Some(offset) = c.rows.get(index as usize).copied() {
                 c.offset = offset;
-                c.history.clear();
+                c.invalidate_layout();
                 c.draw();
                 c.save_later();
             }
