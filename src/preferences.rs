@@ -96,7 +96,7 @@ pub fn progress(offset: usize, length: usize) -> f32 {
 }
 pub fn progress_footer(enabled: bool, offset: usize, length: usize) -> String {
     if enabled {
-        format!("  {:.2}%", progress(offset, length) * 100.)
+        format!("  （{:.2}%）", progress(offset, length) * 100.)
     } else {
         String::new()
     }
@@ -108,7 +108,7 @@ pub fn chapter_progress(doc: &crate::book::Document, offset: usize) -> f32 {
 }
 pub fn chapter_footer(enabled: bool, doc: &crate::book::Document, offset: usize) -> String {
     if enabled {
-        format!("  本章 {:.2}%", chapter_progress(doc, offset) * 100.)
+        format!("  （{:.2}%）", chapter_progress(doc, offset) * 100.)
     } else {
         String::new()
     }
@@ -133,12 +133,5 @@ pub fn display_footer(
     if !enabled {
         return String::new();
     }
-    let label = match mode {
-        crate::settings::ProgressMode::WholeBook => "全书",
-        crate::settings::ProgressMode::Chapter => "本章",
-    };
-    format!(
-        "  {label} {:.2}%",
-        display_progress(mode, doc, offset) * 100.
-    )
+    format!("  （{:.2}%）", display_progress(mode, doc, offset) * 100.)
 }

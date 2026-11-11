@@ -1,7 +1,7 @@
 import { VerticalBox, HorizontalBox, Button, LineEdit, SpinBox, CheckBox, ComboBox, Slider, ScrollView, ListView, AboutSlint, Palette } from "std-widgets.slint";
 export struct ScreenBox { name: string, x: float, y: float, w: float, h: float }
 component NavItem inherits Rectangle {
-    in property <string> label; in property <string> glyph;
+    in property <string> label; in property <image> glyph;
     in property <bool> selected;
     callback clicked();
     height: 40px;
@@ -10,7 +10,7 @@ component NavItem inherits Rectangle {
     border-width: focus.has-focus ? 2px : 0px; border-color: Palette.accent-background;
     accessible-role: button; accessible-label: label; accessible-action-default => {root.clicked();}
     HorizontalBox { padding-left: 10px; padding-right: 10px; spacing: 12px;
-        Text { text: root.glyph; font-family: "Segoe MDL2 Assets"; font-size: 16px; color: root.selected ? Palette.accent-foreground : Palette.foreground; width: 18px; vertical-alignment: center; }
+        Image { source: root.glyph; height: 18px; colorize: root.selected ? Palette.accent-foreground : Palette.foreground; width: 18px; }
         Text { text: root.label; color: root.selected ? Palette.accent-foreground : Palette.foreground; vertical-alignment: center; horizontal-stretch: 1; }
     }
     focus := FocusScope { key-pressed(e) => {if e.text == Key.Return || e.text == " " {root.clicked();return accept;} return reject;} }
@@ -67,7 +67,7 @@ component FontSelect inherits Rectangle {
     border-width: focus.has-focus ? 2px : 1px; border-color: focus.has-focus ? Palette.accent-background : Palette.border;
     accessible-role: button; accessible-label: text; accessible-action-default => {root.clicked();}
     Text { x: 12px; width: max(0px,parent.width - 40px); height: parent.height; text: root.text; overflow: elide; vertical-alignment: center; }
-    Text { x: parent.width - 24px; height: parent.height; text: "\u{E70D}"; font-family: "Segoe MDL2 Assets"; vertical-alignment: center; }
+    Image { x: parent.width - 24px; y: (parent.height - 16px)/2; width: 16px; height: 16px; source: @image-url("../assets/navigation/chevron.svg"); colorize: Palette.foreground; }
     focus := FocusScope { key-pressed(e) => {if e.text == Key.Return || e.text == " " {root.clicked();return accept;} return reject;} }
     TouchArea { clicked => {focus.focus();root.clicked();} }
 }
@@ -114,7 +114,7 @@ export component AppWindow inherits Window {
     icon: @image-url("../assets/loafing-reader.png");
     preferred-width: 1000px; preferred-height: 720px;
     min-width: 650px; min-height: 520px;
-    default-font-family: "Microsoft YaHei UI";
+    default-font-family: "Microsoft YaHei";
     default-font-size: 14px;
     background: Palette.background;
     in-out property <int> section: 0;
@@ -220,7 +220,7 @@ export component AppWindow inherits Window {
                 }
                 for name[i] in root.titles: NavItem {
                     label: name + (root.dirty[i] ? " •" : "");
-                    glyph: ["\u{E8F1}", "\u{E8D2}", "\u{E713}", "\u{E7F4}", "\u{E765}", "\u{E946}"][i];
+                    glyph: [@image-url("../assets/navigation/reading.svg"), @image-url("../assets/navigation/appearance.svg"), @image-url("../assets/navigation/controls.svg"), @image-url("../assets/navigation/window.svg"), @image-url("../assets/navigation/keyboard.svg"), @image-url("../assets/navigation/about.svg")][i];
                     selected: root.section == i;
                     clicked => { root.section = i; }
                 }

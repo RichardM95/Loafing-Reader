@@ -1,3 +1,5 @@
+// Win7 x86 uses emulated TLS; Clippy flags std macro internals despite const initializers.
+#![cfg_attr(target_arch = "x86", allow(clippy::missing_const_for_thread_local))]
 use crate::{
     book,
     settings::{Rect, Style},
@@ -10,7 +12,7 @@ use windows::{
             Direct2D::Common::*, Direct2D::*, DirectWrite::*, Dxgi::Common::*, Gdi::*, Imaging::*,
         },
         System::{Com::*, LibraryLoader::*},
-        UI::{HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
+        UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
     },
     core::*,
 };
@@ -104,7 +106,9 @@ impl Reader {
                 ..Default::default()
             };
             let tip = wide("Loafing Reader");
-            tray.szTip[..tip.len()].copy_from_slice(&tip);
+            let mut tip_buffer = [0_u16; 128];
+            tip_buffer[..tip.len()].copy_from_slice(&tip);
+            tray.szTip = tip_buffer;
             let _ = Shell_NotifyIconW(NIM_ADD, &tray);
             Ok(Self { hwnd })
         }
@@ -150,7 +154,7 @@ impl Reader {
         }
     }
     pub fn dpi(&self) -> f32 {
-        unsafe { (GetDpiForWindow(self.hwnd).max(96) as f32) / 96. }
+        crate::compat::window_dpi(self.hwnd)
     }
     pub fn mouse(&self, yes: bool) {
         MOUSE.set(yes);
@@ -263,7 +267,7 @@ pub fn maintain_topmost(hwnd: HWND) -> bool {
         if GetWindowRect(hwnd, &mut rect).is_err() {
             return false;
         }
-        let mut blocked = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as isize == 0;
+        let mut blocked = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 == 0;
         let mut previous = GetWindow(hwnd, GW_HWNDPREV).ok();
         // Bound traversal in case the desktop's z-order changes while it is being walked.
         for _ in 0..256 {
@@ -356,7 +360,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                         width: rect.right - rect.left,
                         height: rect.bottom - rect.top,
                     },
-                    GetDpiForWindow(hwnd).max(96),
+                    (crate::compat::window_dpi(hwnd) * 96.) as u32,
                 ));
             }
             WM_SIZE if SIZING.get() => {
@@ -371,7 +375,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             }
             WM_GETMINMAXINFO => {
                 let limits = &mut *(l.0 as *mut MINMAXINFO);
-                let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
+                let scale = crate::compat::window_dpi(hwnd);
                 let (width, height) = MINIMUM.get();
                 limits.ptMinTrackSize.x = (width * scale).ceil() as i32;
                 limits.ptMinTrackSize.y = (height * scale).ceil() as i32;
@@ -479,8 +483,7 @@ pub fn screens() -> Vec<Screen> {
                 } else {
                     name.clone()
                 };
-                let (mut dx, mut dy) = (96, 96);
-                let _ = GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
+                let dx = crate::compat::monitor_dpi(m);
                 list.push(Screen {
                     id,
                     name,
@@ -520,6 +523,8 @@ pub struct TextEngine {
     d2d: ID2D1Factory,
     imaging: IWICImagingFactory,
     fonts: Option<IDWriteFontCollection>,
+    font_loader: Option<IDWriteFontCollectionLoader>,
+    legacy_spacing: bool,
 }
 pub struct Page {
     pub end: usize,
@@ -540,35 +545,68 @@ impl TextEngine {
                 d2d: D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?,
                 imaging: CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?,
                 fonts: None,
+                font_loader: None,
+                legacy_spacing: false,
             })
         }
     }
 
+    /// Exercise the Win7 text path on modern systems without modifying system state.
+    pub fn force_legacy_spacing(&mut self, enabled: bool) {
+        self.legacy_spacing = enabled;
+    }
     pub fn load_fonts(&mut self, paths: &[String]) -> Result<Vec<String>> {
         unsafe {
-            let factory: IDWriteFactory5 = self.factory.cast()?;
-            let builder = factory.CreateFontSetBuilder()?;
-            let factory3: IDWriteFactory3 = self.factory.cast()?;
-            builder.AddFontSet(&factory3.GetSystemFontSet()?)?;
+            let mut system = None;
+            self.factory.GetSystemFontCollection(&mut system, false)?;
+            let mut names = crate::legacy_text::family_names(
+                system.as_ref().ok_or_else(|| Error::from(E_FAIL))?,
+            )?;
+            // Validate before replacing the active collection, so failed imports preserve it.
             for path in paths {
                 let file = self
                     .factory
                     .CreateFontFileReference(PCWSTR(wide(path).as_ptr()), None)?;
-                builder.AddFontFile(&file)?;
+                let mut supported = BOOL::default();
+                let mut kind = DWRITE_FONT_FILE_TYPE::default();
+                let mut face = DWRITE_FONT_FACE_TYPE::default();
+                let mut count = 0;
+                file.Analyze(&mut supported, &mut kind, Some(&mut face), &mut count)?;
+                if !supported.as_bool() || count == 0 {
+                    return Err(Error::from(E_INVALIDARG));
+                }
             }
-            self.fonts = Some(
-                factory3
-                    .CreateFontCollectionFromFontSet(&builder.CreateFontSet()?)?
-                    .cast()?,
-            );
-            let mut names = Vec::new();
-            let collection = self.fonts.as_ref().unwrap();
-            for i in 0..collection.GetFontFamilyCount() {
-                let family = collection.GetFontFamily(i)?.GetFamilyNames()?;
-                let len = family.GetStringLength(0)?;
-                let mut buf = vec![0; len as usize + 1];
-                family.GetString(0, &mut buf)?;
-                names.push(String::from_utf16_lossy(&buf[..len as usize]));
+            let candidate = if paths.is_empty() {
+                None
+            } else {
+                let loader: IDWriteFontCollectionLoader =
+                    crate::legacy_text::FontLoader(paths.to_vec()).into();
+                self.factory.RegisterFontCollectionLoader(&loader)?;
+                let result = (|| -> Result<_> {
+                    let collection =
+                        self.factory
+                            .CreateCustomFontCollection(&loader, std::ptr::null(), 0)?;
+                    let imported = crate::legacy_text::family_names(&collection)?;
+                    Ok((collection, imported))
+                })();
+                match result {
+                    Ok((collection, imported)) => {
+                        names.extend(imported);
+                        Some((loader, collection))
+                    }
+                    Err(error) => {
+                        let _ = self.factory.UnregisterFontCollectionLoader(&loader);
+                        return Err(error);
+                    }
+                }
+            };
+            self.fonts.take();
+            if let Some(loader) = self.font_loader.take() {
+                let _ = self.factory.UnregisterFontCollectionLoader(&loader);
+            }
+            if let Some((loader, collection)) = candidate {
+                self.font_loader = Some(loader);
+                self.fonts = Some(collection);
             }
             names.sort();
             names.dedup();
@@ -580,7 +618,14 @@ impl TextEngine {
             let family = wide(&style.family);
             let format = self.factory.CreateTextFormat(
                 PCWSTR(family.as_ptr()),
-                self.fonts.as_ref(),
+                self.fonts.as_ref().filter(|collection| {
+                    let mut index = 0;
+                    let mut exists = BOOL::default();
+                    collection
+                        .FindFamilyName(PCWSTR(family.as_ptr()), &mut index, &mut exists)
+                        .is_ok()
+                        && exists.as_bool()
+                }),
                 DWRITE_FONT_WEIGHT(style.weight),
                 if style.italic {
                     DWRITE_FONT_STYLE_ITALIC
@@ -645,7 +690,9 @@ impl TextEngine {
             let layout =
                 self.factory
                     .CreateTextLayout(&text, format, width.max(1.), height.max(1.))?;
-            if let Ok(layout1) = layout.cast::<IDWriteTextLayout1>() {
+            if !self.legacy_spacing
+                && let Ok(layout1) = layout.cast::<IDWriteTextLayout1>()
+            {
                 layout1.SetCharacterSpacing(
                     style.spacing,
                     0.,
@@ -654,6 +701,14 @@ impl TextEngine {
                         startPosition: 0,
                         length: text.len() as u32,
                     },
+                )?;
+            } else if style.spacing != 0. {
+                crate::legacy_text::apply_spacing(
+                    &self.factory,
+                    &layout,
+                    &text,
+                    format,
+                    style.spacing,
                 )?;
             }
             Ok(layout)
@@ -711,7 +766,7 @@ impl TextEngine {
             return String::new();
         }
         let Ok(format) = self.format(style) else {
-            return "  本章 100.00%".into();
+            return "  （100.00%）".into();
         };
         let mut widest = '8';
         let mut max_width = 0.;
@@ -726,20 +781,7 @@ impl TextEngine {
                 }
             }
         }
-        ["本章", "全书"]
-            .map(|label| format!("  {label} {widest}{widest}{widest}.{widest}{widest}%"))
-            .into_iter()
-            .max_by(|a, b| {
-                let width = |text: &str| {
-                    let mut m = DWRITE_TEXT_METRICS::default();
-                    self.layout(text, style, &format, 10000., 10000.)
-                        .and_then(|layout| unsafe { layout.GetMetrics(&mut m) })
-                        .ok();
-                    m.widthIncludingTrailingWhitespace
-                };
-                width(a).total_cmp(&width(b))
-            })
-            .unwrap_or_default()
+        format!("  （{widest}{widest}{widest}.{widest}{widest}%）")
     }
     /// Only inspect the suffix needed to fill one screen before an arbitrary anchor.
     pub fn previous_page(
@@ -1044,6 +1086,54 @@ pub fn single_instance() -> Result<Option<InstanceGuard>> {
             return Ok(None);
         }
         Ok(Some(InstanceGuard(mutex)))
+    }
+}
+
+impl Drop for TextEngine {
+    fn drop(&mut self) {
+        self.fonts.take();
+        if let Some(loader) = self.font_loader.take() {
+            unsafe {
+                let _ = self.factory.UnregisterFontCollectionLoader(&loader);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod font_import_tests {
+    use super::*;
+    #[test]
+    fn failed_import_preserves_active_collection() {
+        use std::io::Write;
+        let font = ["C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/msyh.ttf"]
+            .into_iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .expect("test requires a Windows CJK font");
+        let mut engine = TextEngine::new().unwrap();
+        engine.load_fonts(&[font.into()]).unwrap();
+        let previous = engine.fonts.as_ref().unwrap().as_raw();
+        let tag = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "loafing-invalid-font-{}-{tag}.ttf",
+            std::process::id()
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(b"invalid font test data").unwrap();
+        drop(file);
+        let failed = engine
+            .load_fonts(&[path.to_string_lossy().into_owned()])
+            .is_err();
+        let retained = engine.fonts.as_ref().map(Interface::as_raw) == Some(previous);
+        std::fs::remove_file(path).unwrap();
+        assert!(failed && retained);
     }
 }
 

@@ -1,6 +1,6 @@
 # Loafing Reader
 
-Windows 10/11 x64 本地 TXT 悬浮阅读器，使用 Rust 编写。
+本地 TXT 悬浮阅读器，使用 Rust 编写。当前改造目标为 Windows 7 SP1 至 Windows 11，提供 x86／x64 兼容预览包；**Win7 尚待实机验证**。
 
 **制作者：扯蛋虾米 · 版本号：0.1**
 
@@ -11,7 +11,7 @@ Windows 10/11 x64 本地 TXT 悬浮阅读器，使用 Rust 编写。
 ## 开始阅读
 
 1. 查看 Releases 是否提供适合的免安装包；若尚无发布附件，可按下方说明自行构建。
-2. 解压下载到的免安装 ZIP，保留随包 DLL，运行 `LoafingReader.exe`。
+2. 解压下载到的免安装 ZIP，保留随包许可证，运行 `LoafingReader.exe`。
 3. 在“阅读”页点击“打开 TXT”，或通过“最近阅读”继续小说。
 4. 关闭系统设置窗口只会隐藏它；重新打开或完整退出，请使用系统托盘菜单。
 
@@ -26,7 +26,7 @@ Windows 10/11 x64 本地 TXT 悬浮阅读器，使用 Rust 编写。
 - **多屏定位**：选择显示器、设置屏内坐标与尺寸，支持居中、位置重置及窗口找回。
 - **阅读操作**：鼠标左键下一页、右键上一页，可配置自动翻页和全局快捷键。
 
-系统设置跟随 Windows 明暗主题。新配置默认阅读窗为 856 × 47 个逻辑像素、14 像素字号；窗口放大后会自动增加显示行数。短段落右侧允许留白。
+系统设置沿用 Fluent 界面与软件渲染；支持系统明暗主题的 Windows 版本会跟随主题，Win7 使用系统 DPI。新配置默认阅读窗为 856 × 47 个逻辑像素、14 像素字号；窗口放大后会自动增加显示行数。短段落右侧允许留白。
 
 ## 阅读进度
 
@@ -78,28 +78,35 @@ Windows 10/11 x64 本地 TXT 悬浮阅读器，使用 Rust 编写。
 
 ## 从源码构建
 
-需要 Windows x64、PowerShell 7 或更高版本、Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK。首次构建需要联网下载依赖，版本由 `Cargo.lock` 固定。
-
-在项目根目录运行 PowerShell：
+构建主机需要 Windows x64、PowerShell 7、Rust **1.99.1**（包括同版本 `rust-src`、`rustfmt`、`clippy`）、Visual Studio 2019 的 **v142 14.29.30133** x86/x64 工具链，以及 Windows SDK **10.0.19041.0**。首次构建需要联网。
 
 ```powershell
-.\build.ps1 build
+rustup toolchain install 1.99.1 --profile minimal --component rust-src,rustfmt,clippy
+rustup override set 1.99.1
+.\build.ps1 test
+.\build.ps1 clippy
 .\build.ps1 release
 .\build.ps1 package
 ```
 
+脚本使用 Rust 官方 Win7 目标，从源码构建标准库，并静态链接 CRT。`RUSTC_BOOTSTRAP` 仅用于构建进程启用 `build-std`，不修改全局配置。应用和第三方依赖由 `Cargo.lock` 固定，Slint 后端和 COM 核心的兼容补丁及许可保存在 `vendor/`。生成的 Windows API 包装由脚本校验固定源码 SHA-256 后复制到 `.tools/` 并修补，缓存不进入 Git 或源码包；补丁逻辑随构建脚本交付，原始注册表缓存保持不变。
+
+单独构建一个架构：`.\compat-build.ps1 -Task build -Architecture x64`（或 `x86`）。
+
 | 输出 | 路径 |
 | --- | --- |
-| Release 程序 | `target/release/thief-reader.exe` |
-| 免安装目录 | `dist/Loafing-Reader/`，入口为 `LoafingReader.exe` |
-| 免安装 ZIP | `dist/Loafing-Reader-win64.zip` |
+| Release 程序 | `target/{x86_64,i686}-win7-windows-msvc/release/thief-reader.exe` |
+| 免安装目录 | `dist/Loafing-Reader-win64/`、`dist/Loafing-Reader-win32/` |
+| 免安装 ZIP | `dist/Loafing-Reader-win64.zip`、`dist/Loafing-Reader-win32.zip` |
 | 源码 ZIP | `dist/Loafing-Reader-source.zip` |
 
-打包会检查程序和 VC 运行库依赖，只附带需要的 x64 DLL，以及简短使用说明和许可证。缺少所需运行库或输出文件被占用时会报错；请先退出旧版再重新打包。
+Win11 使用 x64 包。Win7 最低目标为原版 SP1，无需额外平台更新或 VC 运行库安装；完成实机验收前请按兼容预览看待。Win7 字距使用基础 DirectWrite 的字形簇绘制路径，字体实际覆盖范围取决于所选字体。设置、字体和进度目录保持兼容。
+
+打包会核查不兼容的静态导入，并验证 ZIP 内所有文件哈希。新包验证成功后才替换已有输出；文件占用会报错，不关闭正在运行的程序。
 
 图标素材在编译时嵌入程序，正常构建不需要 Python。资源编译器由 Windows SDK 提供，也可通过 `RC` 环境变量指定 `rc.exe` 路径。
 
-Git 与源码 ZIP 包含构建所需源码、UI、图标、许可证和脚本。本地开发文档、测试、辅助工具、镜像配置、编辑器状态和构建缓存由 `.gitignore` 排除。源码 ZIP 从当前受 Git 跟踪的文件生成。
+Git 与源码 ZIP 包含构建所需源码、UI、图标、许可证和脚本。本地开发文档、测试、辅助工具、镜像配置、编辑器状态和构建缓存由 `.gitignore` 排除。源码 ZIP 使用明确的构建文件清单生成，包括兼容补丁，不包含本地数据和工具链。
 
 ## 许可与参考
 
