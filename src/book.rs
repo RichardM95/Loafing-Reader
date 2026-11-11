@@ -18,6 +18,10 @@ pub struct Document {
 }
 
 impl Document {
+    pub fn is_epub(&self) -> bool {
+        self.encoding == "EPUB"
+    }
+
     /// Directory entries define sections, including any introduction before the first title.
     pub fn chapter_range(&self, offset: usize) -> std::ops::Range<usize> {
         let length = self.text.len();
@@ -67,6 +71,12 @@ pub fn decode(raw: &[u8], label: &str) -> Result<String, String> {
 }
 
 pub fn open(path: &Path, encoding: &str, rule: Option<&str>) -> Result<Document, String> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("epub"))
+    {
+        return crate::epub::open(path);
+    }
     let raw = std::fs::read(path).map_err(|e| e.to_string())?;
     let text = decode(&raw, encoding)?;
     let chapters = chapters(&text, rule)?;

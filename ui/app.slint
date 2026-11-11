@@ -128,6 +128,7 @@ export component AppWindow inherits Window {
     in-out property <int> selected: -1;
     in-out property <string> query;
     in-out property <string> rule;
+    in-out property <bool> structured-book: false;
     in-out property <string> encoding: "auto";
     callback change-encoding();
     in-out property <[string]> font-families;
@@ -235,7 +236,7 @@ export component AppWindow inherits Window {
             HorizontalBox {
                 padding: 0px;
                 Text { text: root.titles[root.section]; font-size: 22px; font-weight: 600; horizontal-stretch: 1; }
-                if root.section == 0: Button { text: "打开 TXT"; primary: true; clicked => { root.open-book(); } }
+                if root.section == 0: Button { text: "打开小说"; primary: true; clicked => { root.open-book(); } }
                 if root.section == 0: Button { text: "最近阅读"; clicked => { root.recent-book(); } }
             }
             if root.section == 0: VerticalBox {
@@ -247,7 +248,7 @@ export component AppWindow inherits Window {
                     ComboBox { width: 160px; model: ["全书进度", "章节进度"]; current-index <=> root.progress-mode; selected => { root.change-progress-mode(root.progress-mode); } }
                 }
                 HorizontalBox {
-                    if root.advanced: ComboBox { model: ["auto", "utf-8", "utf-16le", "utf-16be", "gbk", "gb18030", "big5"]; selected(value) => { root.encoding = value; root.change-encoding(); } }
+                    if root.advanced && !root.structured-book: ComboBox { model: ["auto", "utf-8", "utf-16le", "utf-16be", "gbk", "gb18030", "big5"]; selected(value) => { root.encoding = value; root.change-encoding(); } }
                     Button { text: "章节目录"; clicked => { root.show-chapters(); } }
                     LineEdit { text <=> root.query; placeholder-text: "搜索正文"; accepted => { root.search(); } }
                     Button { text: "搜索"; clicked => { root.search(); } }
@@ -273,7 +274,8 @@ export component AppWindow inherits Window {
                     Button { width: 180px; text: root.advanced ? "收起高级选项" : "编码与章节规则"; clicked => { root.advanced = !root.advanced; } }
                     Rectangle { horizontal-stretch: 1; }
                 }
-                if root.advanced: HorizontalBox {
+                if root.advanced && root.structured-book: Text { text: "EPUB 自动使用书内编码和目录；当前提取正文阅读。"; wrap: word-wrap; font-size: 12px; }
+                if root.advanced && !root.structured-book: HorizontalBox {
                     LineEdit { text <=> root.rule; placeholder-text: "本书章节正则，留空使用自动识别"; }
                     Button { text: "预览"; clicked => { root.apply-rule(false); } }
                     Button { text: "应用"; clicked => { root.apply-rule(true); } }

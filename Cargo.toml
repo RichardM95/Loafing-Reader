@@ -7,6 +7,11 @@ license = "MIT"
 default = ["desktop"]
 desktop = ["dep:slint", "dep:slint-build", "dep:rfd"]
 [dependencies]
+zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
+roxmltree = "=0.21.2"
+htmlparser = "=0.2.1"
+html-escape = "0.2"
+percent-encoding = "2.3"
 encoding_rs = "0.8"
 chardetng = "0.1"
 regex = "1"

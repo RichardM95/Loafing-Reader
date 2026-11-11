@@ -317,8 +317,10 @@ impl Controller {
                                 c.offset = book::boundary(&doc.text, memo.offset);
                                 c.invalidate_layout();
                                 c.invalidate_layout();
+                                let structured = doc.is_epub();
                                 c.document = Some(doc);
                                 if let Some(ui) = c.ui.upgrade() {
+                                    ui.set_structured_book(structured);
                                     ui.set_rule(memo.rule.into());
                                     ui.set_encoding(encoding.into());
                                 }
@@ -438,7 +440,7 @@ impl Controller {
             self.rows = doc.chapters.iter().map(|x| x.start).collect();
             if let Some(ui) = self.ui.upgrade() {
                 ui.set_rows(strings(doc.chapters.iter().map(|x| {
-                    format!("{}{}", if x.level == 0 { "" } else { "    " }, x.title)
+                    format!("{}{}", "    ".repeat(usize::from(x.level.min(8))), x.title)
                 })));
                 ui.set_selected(
                     doc.chapters
@@ -487,6 +489,10 @@ impl Controller {
         let Some(doc) = &mut self.document else {
             return;
         };
+        if doc.is_epub() {
+            self.status("EPUB 使用书内目录，无需设置章节正则");
+            return;
+        }
         match book::chapters(&doc.text, Some(&rule)) {
             Ok(chapters) => {
                 let count = chapters.len();
@@ -1079,7 +1085,9 @@ pub fn connect(ui: &AppWindow, c: &Rc<RefCell<Controller>>) {
     connect!(
         on_open_book,
         |c: &mut Controller| if let Some(path) = rfd::FileDialog::new()
-            .add_filter("TXT 小说", &["txt"])
+            .add_filter("小说（TXT / EPUB）", &["txt", "epub"])
+            .add_filter("TXT 文本", &["txt"])
+            .add_filter("EPUB 电子书", &["epub"])
             .pick_file()
         {
             c.open(path, None);
@@ -1316,6 +1324,9 @@ pub fn connect(ui: &AppWindow, c: &Rc<RefCell<Controller>>) {
     connect!(
         on_change_encoding,
         |c: &mut Controller| if let Some(ui) = c.ui.upgrade() {
+            if c.document.as_ref().is_some_and(Document::is_epub) {
+                return;
+            }
             let encoding = ui.get_encoding().to_string();
             let key = c.settings.current.clone();
             c.settings.books.entry(key.clone()).or_default().encoding = encoding.clone();

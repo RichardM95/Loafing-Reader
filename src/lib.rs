@@ -13,3 +13,5 @@ pub mod compat;
 
 #[cfg(windows)]
 mod legacy_text;
+
+mod epub;

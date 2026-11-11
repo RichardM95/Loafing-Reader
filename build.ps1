@@ -57,10 +57,11 @@ try {
             Copy-Item -LiteralPath licenses/Slint-License.md -Destination (Join-Path $stage 'licenses')
             Copy-Item -LiteralPath vendor/windows-core/license-mit -Destination (Join-Path $stage 'licenses/windows-core-MIT.txt')
             Copy-Item -LiteralPath vendor/windows-core/license-apache-2.0 -Destination (Join-Path $stage 'licenses/windows-core-Apache-2.0.txt')
+            Copy-Item -LiteralPath licenses/EPUB-Dependencies.txt -Destination (Join-Path $stage 'licenses')
             $usage=@"
 Loafing Reader 0.1 · 制作者：扯蛋虾米
 Win7 SP1 至 Win11 兼容预览，Win7 待实机验证。此包为 $bit 位。
-运行 LoafingReader.exe 开始阅读。关闭设置窗口只会隐藏它。
+运行 LoafingReader.exe 打开 TXT 或未加密的 EPUB 文字书籍。关闭设置窗口只会隐藏它。
 完整退出：托盘“退出”；窗口找回：托盘“找回窗口”或 Ctrl+Alt+R。
 配置、阅读进度和字体位于 %APPDATA%\Thief-Reader。
 更新前先通过托盘退出旧版，再解压替换文件。
