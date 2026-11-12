@@ -60,7 +60,7 @@ try {
             Copy-Item -LiteralPath licenses/EPUB-Dependencies.txt -Destination (Join-Path $stage 'licenses')
             $usage=@"
 Loafing Reader 0.1 · 制作者：扯蛋虾米
-Win7 SP1 至 Win11 兼容预览，Win7 待实机验证。此包为 $bit 位。
+适用于 Win7 SP1 至 Win11；Win7 SP1 已由用户反馈实机验证通过。此包为 $bit 位。
 运行 LoafingReader.exe 打开 TXT 或未加密的 EPUB 文字书籍。关闭设置窗口只会隐藏它。
 完整退出：托盘“退出”；窗口找回：托盘“找回窗口”或 Ctrl+Alt+R。
 配置、阅读进度和字体位于 %APPDATA%\Thief-Reader。

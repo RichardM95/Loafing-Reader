@@ -1,6 +1,6 @@
 # Loafing Reader
 
-本地 TXT／EPUB 悬浮阅读器，使用 Rust 编写。当前改造目标为 Windows 7 SP1 至 Windows 11，提供 x86／x64 兼容预览包；**Win7 尚待实机验证**。
+本地 TXT／EPUB 悬浮阅读器，使用 Rust 编写。面向 Windows 7 SP1 至 Windows 11，提供 x86／x64 免安装包。**Win7 SP1 已由用户实机验证通过**。
 
 **制作者：扯蛋虾米 · 版本号：0.1**
 
@@ -10,7 +10,7 @@
 
 ## 开始阅读
 
-1. 查看 Releases 是否提供适合的免安装包；若尚无发布附件，可按下方说明自行构建。
+1. 从 [v0.1.0 Releases](https://github.com/RichardM95/Loafing-Reader/releases/tag/v0.1.0) 下载对应系统位数的免安装包：[64 位](https://github.com/RichardM95/Loafing-Reader/releases/download/v0.1.0/Loafing-Reader-win64.zip)／[32 位](https://github.com/RichardM95/Loafing-Reader/releases/download/v0.1.0/Loafing-Reader-win32.zip)。Win11 请使用 64 位包。
 2. 解压下载到的免安装 ZIP，保留随包许可证，运行 `LoafingReader.exe`。
 3. 在“阅读”页点击“打开小说”，或通过“最近阅读”继续小说。
 4. 关闭系统设置窗口只会隐藏它；重新打开或完整退出，请使用系统托盘菜单。
@@ -77,6 +77,8 @@ EPUB 的目录和编码由书籍自身提供，TXT 的编码选择和自定义�
 
 配置、各书阅读进度和导入字体保存在 `%APPDATA%\Thief-Reader`。备份时可复制整个目录；自定义位置可通过 `THIEF_READER_DATA` 环境变量指定。
 
+Win7 SP1 的实机验证通过信息来自用户反馈。项目侧另已通过 x86／x64 构建、104 项自动化回归及依赖导入检查；自动化检查与实机反馈分别记录。
+
 软件名称为 Loafing Reader，内部 Cargo 包名、配置目录和单实例标识保留原名，以兼容已有 Rust 版本的数据。新版不提供 Electron 旧版配置导入。
 
 ## 从源码构建
@@ -103,7 +105,7 @@ rustup override set 1.99.1
 | 免安装 ZIP | `dist/Loafing-Reader-win64.zip`、`dist/Loafing-Reader-win32.zip` |
 | 源码 ZIP | `dist/Loafing-Reader-source.zip` |
 
-Win11 使用 x64 包。Win7 最低目标为原版 SP1，无需额外平台更新或 VC 运行库安装；完成实机验收前请按兼容预览看待。Win7 字距使用基础 DirectWrite 的字形簇绘制路径，字体实际覆盖范围取决于所选字体。设置、字体和进度目录保持兼容。
+Win11 使用 x64 包。Win7 最低目标为原版 SP1，程序静态链接运行库，无需另外安装 VC 运行库。Win7 SP1 已由用户反馈实机验证通过。Win7 字距使用基础 DirectWrite 的字形簇绘制路径，字体实际覆盖范围取决于所选字体。设置、字体和进度目录保持兼容。
 
 打包会核查不兼容的静态导入，并验证 ZIP 内所有文件哈希。新包验证成功后才替换已有输出；文件占用会报错，不关闭正在运行的程序。
 
